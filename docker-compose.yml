@@ -54,6 +54,7 @@ services:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev}
       HINDSIGHT_API_URL: http://hindsight:8888
       HINDSIGHT_ROUTING_CONFIG: /app/config/hindsight_routing.yaml
+      HINDSIGHT_LOG_LEVEL: ${HINDSIGHT_LOG_LEVEL:-INFO}   # one line per recall and retain
     volumes:
       - ./config:/app/config:ro
       - ./src/litellm_hindsight:/usr/local/lib/python3.12/site-packages/litellm_hindsight:ro
