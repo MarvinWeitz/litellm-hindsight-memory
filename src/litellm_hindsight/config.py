@@ -14,6 +14,11 @@ Two kinds of request tags drive routing:
   e.g. ``project:acme-portal``
 Each kind has a name, which is also its placeholder in bank and tag templates
 (``{customer}``, ``{project}``).
+
+Global banks (``global_banks``) are shared banks on top of the bank picked by
+the bank tag. Each says which routed requests read it, how to recall from it,
+and the Hindsight profile that ``python -m litellm_hindsight.provision``
+applies to it. The plugin only ever reads them.
 """
 
 from __future__ import annotations
@@ -53,6 +58,45 @@ class ReadTarget:
 
 
 @dataclass(frozen=True)
+class AppliesTo:
+    """Which routed requests read a global bank. An empty field means no limit."""
+
+    bank_values: tuple[str, ...] = ()
+    exclude_bank_values: tuple[str, ...] = ()
+    scope_values: tuple[str, ...] = ()
+    exclude_scope_values: tuple[str, ...] = ()
+    request_tags: tuple[str, ...] = ()  # the request must carry at least one
+
+    def matches(self, bank_value: str, scope_value: str | None, tags: list[str]) -> bool:
+        if self.bank_values and bank_value not in self.bank_values:
+            return False
+        if bank_value in self.exclude_bank_values:
+            return False
+        if self.scope_values and scope_value not in self.scope_values:
+            return False
+        if scope_value is not None and scope_value in self.exclude_scope_values:
+            return False
+        return not self.request_tags or bool(set(self.request_tags) & set(tags))
+
+
+@dataclass(frozen=True)
+class GlobalBank:
+    id: str
+    name: str
+    applies_to: AppliesTo
+    read: ReadTarget
+    profile: dict[str, Any]  # missions and disposition for create_bank
+    bank_config: dict[str, Any]  # any Hindsight bank config key, for update_bank_config
+
+    def create_kwargs(self) -> dict[str, Any]:
+        """Arguments for Hindsight ``create_bank``, which creates or updates the bank."""
+        kwargs = {k: v for k, v in self.profile.items() if k != "disposition"}
+        for trait, value in (self.profile.get("disposition") or {}).items():
+            kwargs[f"disposition_{trait}"] = value
+        return {"name": self.name, **kwargs}
+
+
+@dataclass(frozen=True)
 class RoutingConfig:
     hindsight_url: str
     hindsight_api_key: str | None
@@ -81,6 +125,7 @@ class RoutingConfig:
     memory_header: str
     untagged_request: str
     allowed: dict[str, list[str] | None] | None
+    global_banks: tuple[GlobalBank, ...]
 
     @property
     def placeholders(self) -> tuple[str, ...]:
@@ -97,7 +142,8 @@ class RoutingConfig:
                                       "document_prefix", "metadata"})
         recall = r.section("recall", {"timeout_seconds", "cache_ttl_seconds", "cache_size"})
         inject = r.section("inject", {"marker", "header"})
-        r.done({"hindsight", "tags", "banks", "retain", "recall", "inject", "untagged_request", "allowed"})
+        r.done({"hindsight", "tags", "banks", "retain", "recall", "inject", "untagged_request", "allowed",
+                "global_banks"})
 
         bank_tag = _tag_kind(tags.section("bank", {"name", "prefix"}))
         scope_raw = tags.get("scope", (dict, type(None)))
@@ -139,8 +185,10 @@ class RoutingConfig:
             memory_header=inject.get("header", str),
             untagged_request=r.choice("untagged_request", UNTAGGED),
             allowed=r.get("allowed", (dict, type(None))),
+            global_banks=_global_banks(r, bank_tag, scope_tag, tags.get("lowercase", bool)),
         )
         cfg._check_templates()
+        cfg._check_global_banks()
         return cfg
 
     def _check_templates(self) -> None:
@@ -165,6 +213,15 @@ class RoutingConfig:
         for field_name in _fields(self.memory_header):
             if field_name != "scope":
                 raise ConfigError(f"inject.header: unknown placeholder {{{field_name}}}; only {{scope}} is available")
+
+
+    def _check_global_banks(self) -> None:
+        ids = {g.id for g in self.global_banks}
+        for i, target in enumerate(self.reads):
+            if target.bank in ids:
+                raise ConfigError(f"banks.read[{i}]: {target.bank!r} is also in global_banks; keep it in one place")
+        if self.write_bank in ids:
+            raise ConfigError(f"banks.write {self.write_bank!r} is a global bank; global banks are read-only")
 
 
 def load_config(path: str | os.PathLike[str] | None = None) -> RoutingConfig:
@@ -244,6 +301,65 @@ def _read_target(raw: Any, path: str) -> ReadTarget:
         budget=r.choice("budget", BUDGETS),
         max_tokens=int(r.number("max_tokens")),
     )
+
+
+def _global_banks(r: _Reader, bank_tag: TagKind, scope_tag: TagKind | None,
+                  lowercase: bool) -> tuple[GlobalBank, ...]:
+    banks: list[GlobalBank] = []
+    for i, raw in enumerate(r.get("global_banks", list)):
+        g = _Reader(raw, f"{r.path}.global_banks[{i}]")
+        g.done({"id", "name", "applies_to", "recall", "profile"})
+        bank_id = g.get("id", str)
+        if not bank_id.strip() or _fields(bank_id):
+            raise ConfigError(f"{g.path}.id must be a fixed bank id without placeholders, got {bank_id!r}")
+        if any(b.id == bank_id for b in banks):
+            raise ConfigError(f"{g.path}: global bank {bank_id!r} is listed twice")
+        recall = _Reader(g.get("recall", dict), f"{g.path}.recall")
+        profile = _Reader(g.get("profile", dict), f"{g.path}.profile")
+        profile.done(_PROFILE_KEYS)
+        if "disposition" in profile.data:
+            profile.section("disposition", {"skepticism", "literalism", "empathy"})
+        bank_config = profile.get("config", dict) if "config" in profile.data else {}
+        banks.append(GlobalBank(
+            id=bank_id,
+            name=g.get("name", (str, type(None))) or bank_id,
+            applies_to=_applies_to(g, bank_tag, scope_tag, lowercase),
+            read=_read_target({"bank": bank_id, **recall.data}, recall.path),
+            profile={k: _squash(v) for k, v in profile.data.items() if k != "config"},
+            bank_config=bank_config,
+        ))
+    return tuple(banks)
+
+
+_PROFILE_KEYS = {"mission", "background", "retain_mission", "observations_mission", "reflect_mission",
+                 "disposition", "config"}
+
+
+def _applies_to(g: _Reader, bank_tag: TagKind, scope_tag: TagKind | None, lowercase: bool) -> AppliesTo:
+    """Keys follow the tag names: with bank tag ``customer`` they are customer, exclude_customer, ..."""
+    raw = g.get("applies_to", (str, dict))
+    if raw == "all":
+        return AppliesTo()
+    keys = {bank_tag.name: "bank_values", f"exclude_{bank_tag.name}": "exclude_bank_values",
+            "request_tags": "request_tags"}
+    if scope_tag:
+        keys |= {scope_tag.name: "scope_values", f"exclude_{scope_tag.name}": "exclude_scope_values"}
+    a = _Reader(raw, f"{g.path}.applies_to") if isinstance(raw, dict) else None
+    if a is None or not a.data:
+        raise ConfigError(f"{g.path}.applies_to must be 'all' or a mapping with any of {', '.join(keys)}")
+    a.done(set(keys))
+    fields = {}
+    for key, field_name in keys.items():
+        if key in a.data:
+            values = a.str_list(key)
+            # Tag values are compared the way routing reads them; request tags as written.
+            fields[field_name] = tuple(v.lower() if lowercase and key != "request_tags" else v for v in values)
+    return AppliesTo(**fields)
+
+
+def _squash(value: Any) -> Any:
+    """Join folded YAML text into one line, so missions read the same however they are wrapped."""
+    return " ".join(value.split()) if isinstance(value, str) else value
 
 
 def _env(env: dict[str, str], name: str, where: str) -> str:
