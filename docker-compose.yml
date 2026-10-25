@@ -34,6 +34,7 @@ services:
       HINDSIGHT_API_LLM_MODEL: ${HINDSIGHT_LLM_MODEL:-hindsight-extraction}
       HINDSIGHT_API_WORKER_ID: local-dev
       # CPU-friendly reranking, as Hindsight's performance guide suggests.
+      HINDSIGHT_API_RERANKER_PROVIDER: ${HINDSIGHT_RERANKER_PROVIDER:-local}
       HINDSIGHT_API_RERANKER_MAX_CANDIDATES: ${HINDSIGHT_RERANKER_MAX_CANDIDATES:-100}
       HINDSIGHT_CP_DATAPLANE_API_URL: http://localhost:8888
     ports:

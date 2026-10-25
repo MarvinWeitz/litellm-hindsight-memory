@@ -76,6 +76,7 @@ Point `HINDSIGHT_ROUTING_CONFIG` at the file. `HINDSIGHT_API_URL` and `HINDSIGHT
 
 - **One recall per developer turn.** Coding agents send many requests per task, mostly tool results. The plugin recalls on the developer's message and reuses that result for the tool-loop requests that follow.
 - **Prompt caching stays intact.** Memory goes at the start of the developer's latest message, not into the system prompt, and the same text is reused within a turn.
+- **Reranking is the expensive part on CPU.** In the devcontainer, recall from a bank with about 100 candidates took about 4 s with Hindsight's default cross-encoder reranker and under 200 ms without it. For local work, seed with `python scripts/seed_banks.py --no-rerank` or set `HINDSIGHT_RERANKER_PROVIDER=flashrank` in `.env`. In production, give Hindsight a GPU or a hosted reranker.
 - **Fail open.** A bank that doesn't answer within the timeout is skipped and logged.
 - **Saving never blocks.** Retain runs in LiteLLM's success logger with `retain_async=True`. Tool-call responses are not saved, only the final answer of a turn.
 
