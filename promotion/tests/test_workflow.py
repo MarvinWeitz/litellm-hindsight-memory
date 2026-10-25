@@ -32,7 +32,11 @@ class FakeStore:
         if bank_id not in self.banks:
             self.banks.append(bank_id)
 
+    def has_memories(self, bank_id, tags):
+        return tags == ["domain:cap"]
+
     def reflect(self, bank_id, query, *, budget, schema, tags, tags_match):
+        assert tags in (["domain:cap"], None), "empty domains must be skipped"
         if tags == ["domain:cap"]:
             return {"candidates": [{"text": PORTAL_FACT["text"], "source_fact_ids": ["f1"]},
                                    {"text": DONE_FACT["text"], "source_fact_ids": ["f3"]}]}, [PORTAL_FACT, DONE_FACT]
@@ -77,6 +81,14 @@ def test_harvest_anonymizes_dedupes_and_drops_leaks():
     assert dropped[LANDSCAPE_FACT["text"]].startswith("not generic")
     assert all("Old fact" not in c.original for c, _ in result.dropped)  # promote:done is skipped
     assert len(result.dropped) == 2  # the portal fact came from two passes but counts once
+
+
+def test_harvest_reports_progress_and_filters_banks():
+    lines = []
+    harvest(FakeStore(), FakeAnonymizer(), CFG, progress=lines.append)
+    assert "customer::acme  domain:xsuaa: no facts, skipped" in lines
+    assert any(line.startswith("customer::acme  whole bank: ") and "new candidates" in line for line in lines)
+    assert not harvest(FakeStore(), FakeAnonymizer(), CFG, banks=["customer::globex"]).candidates
 
 
 def test_stage_keeps_customer_in_metadata_only(tmp_path):

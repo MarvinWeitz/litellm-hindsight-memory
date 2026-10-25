@@ -1,6 +1,6 @@
 """Command line for the promotion workflow.
 
-  python -m hindsight_promotion harvest [--dry-run]       candidates -> staging bank + review file
+  python -m hindsight_promotion harvest [--dry-run] [--bank B]   candidates -> staging bank + review file
   python -m hindsight_promotion publish REVIEW_FILE [--dry-run]
   python -m hindsight_promotion nominate BANK DOCUMENT_ID  put a document into the next harvest
 """
@@ -27,6 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     h = sub.add_parser("harvest", help="find, anonymize and stage candidates")
     h.add_argument("--dry-run", action="store_true", help="print candidates; stage nothing, write no file")
+    h.add_argument("--bank", action="append", help="harvest only this bank (repeatable)")
     p = sub.add_parser("publish", help="publish approved items from a review file")
     p.add_argument("review_file", type=Path)
     p.add_argument("--dry-run", action="store_true", help="check the file; write nothing")
@@ -41,7 +42,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "harvest":
             anonymizer = Anonymizer(cfg.llm_base_url, cfg.llm_model, cfg.llm_api_key, cfg.kinds)
-            result = harvest(store, anonymizer, cfg)
+            result = harvest(store, anonymizer, cfg, banks=args.bank,
+                             progress=lambda msg: print(msg, file=sys.stderr, flush=True))
             print(summary(result))
             if not args.dry_run and result.candidates:
                 stage(store, cfg, result)

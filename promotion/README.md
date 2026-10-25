@@ -23,7 +23,9 @@ Inside the devcontainer, with the stack up, it's installed already (`pip install
 ```bash
 set -a; source .env; set +a
 
-# 1. See what would be proposed, without writing anything
+# 1. See what would be proposed, without writing anything.
+#    Progress goes to stderr; each reflect takes seconds to a few minutes on CPU.
+#    --bank customer::acme limits the run to one bank.
 python -m hindsight_promotion harvest --dry-run
 
 # 2. Stage the candidates and write the review file

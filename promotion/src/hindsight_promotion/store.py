@@ -43,6 +43,9 @@ class HindsightStore:
         ]
         return r.structured_output or {}, facts
 
+    def has_memories(self, bank_id: str, tags: list[str]) -> bool:
+        return self.client.list_memories(bank_id, tags=tags, tags_match="any_strict", limit=1).total > 0
+
     def memories(self, bank_id: str, tags: list[str]) -> list[dict]:
         out, offset = [], 0
         while True:
@@ -55,7 +58,8 @@ class HindsightStore:
 
     def retain(self, bank_id: str, text: str, *, document_id: str, tags: list[str],
                metadata: dict[str, str], context: str) -> None:
-        self.client.retain(bank_id, text, document_id=document_id, tags=tags, metadata=metadata, context=context)
+        self.client.retain(bank_id, text, document_id=document_id, tags=tags, metadata=metadata, context=context,
+                           retain_async=True)  # extraction runs in Hindsight; do not wait per item
 
     def document_tags(self, bank_id: str, document_id: str) -> list[str]:
         r = self.http.get(f"/banks/{bank_id}/documents/{document_id}")
