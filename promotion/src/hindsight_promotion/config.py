@@ -24,10 +24,15 @@ class PromotionConfig:
     llm_model: str | None
     blocklist: tuple[str, ...]
     kinds: tuple[str, ...]
+    triage: bool = True
+    max_per_bank: int = 5
+    min_score: int = 7
+    novelty_check: bool = True
 
     @classmethod
     def from_dict(cls, raw: dict) -> PromotionConfig:
         banks, harvest, anon = raw["banks"], raw["harvest"], raw["anonymize"]
+        triage = raw.get("triage") or {}
         return cls(
             customer_prefix=banks["customers"],
             staging_bank=banks["staging"],
@@ -42,6 +47,10 @@ class PromotionConfig:
             llm_model=os.environ.get(anon.get("model_env", "")) or anon.get("model"),
             blocklist=tuple(anon.get("blocklist") or ()),
             kinds=tuple(raw.get("kinds") or ("decision", "pitfall", "pattern", "runbook")),
+            triage=bool(triage.get("enabled", True)),
+            max_per_bank=int(triage.get("max_per_bank", 5)),
+            min_score=int(triage.get("min_score", 7)),
+            novelty_check=bool(triage.get("novelty_check", True)),
         )
 
 

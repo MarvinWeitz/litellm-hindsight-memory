@@ -19,7 +19,7 @@ harvest:
   max_candidates_per_pass: 10
 
 anonymize:
-  # OpenAI-compatible endpoint. The local LiteLLM proxy works: requests carry
+  # OpenAI-compatible endpoint, also used by triage. The local LiteLLM proxy works: requests carry
   # no customer tag, so the memory plugin lets them through untouched.
   base_url: http://localhost:4000/v1
   api_key_env: LITELLM_MASTER_KEY
@@ -27,5 +27,14 @@ anonymize:
   # Words that must never reach the global bank, on top of the customer slugs
   # found in bank names. A candidate containing one after anonymization is dropped.
   blocklist: [ACME-DC1]
+
+triage:
+  # Cuts the review list: merges duplicates, drops what the model already knows
+  # or what global::sap already has, and keeps the best few per bank. Filtered
+  # candidates still appear in the review file with the reason.
+  enabled: true
+  max_per_bank: 5       # nominated facts are always kept on top of this
+  min_score: 7          # specificity (1-5) + reusability (1-5) + independent sources (up to 3)
+  novelty_check: true   # one extra LLM call per candidate: answer the topic without memory
 
 kinds: [decision, pitfall, pattern, runbook]
