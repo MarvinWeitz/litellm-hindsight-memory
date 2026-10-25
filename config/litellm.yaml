@@ -1,0 +1,27 @@
+model_list:
+  # Claude Code and other Anthropic clients: any claude-* model name.
+  - model_name: "claude-*"
+    litellm_params:
+      model: "anthropic/claude-*"
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: "gpt-*"
+    litellm_params:
+      model: "openai/gpt-*"
+      api_key: os.environ/OPENAI_API_KEY
+  # Used by Hindsight for fact extraction. Point it at whatever provider you have.
+  - model_name: hindsight-extraction
+    litellm_params:
+      model: anthropic/claude-haiku-5-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  # Offline model for smoke tests and latency runs without provider cost.
+  - model_name: mock
+    litellm_params:
+      model: openai/mock
+      api_key: fake
+      mock_response: "This is a mock answer from the local proxy."
+
+litellm_settings:
+  callbacks: litellm_hindsight.proxy_handler_instance
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

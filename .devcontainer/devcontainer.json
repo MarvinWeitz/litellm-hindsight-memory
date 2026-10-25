@@ -1,0 +1,18 @@
+{
+  "name": "litellm-hindsight-memory",
+  "dockerComposeFile": ["../docker-compose.yml", "docker-compose.devcontainer.yml"],
+  "service": "workspace",
+  "runServices": ["workspace", "postgres", "hindsight", "litellm"],
+  "workspaceFolder": "/workspace",
+  "shutdownAction": "stopCompose",
+  "forwardPorts": [4000, 8888, 9999],
+  "portsAttributes": {
+    "4000": {"label": "LiteLLM proxy"},
+    "8888": {"label": "Hindsight API"},
+    "9999": {"label": "Hindsight UI"}
+  },
+  "postCreateCommand": "pip install -e '.[dev]'",
+  "customizations": {
+    "vscode": {"extensions": ["ms-python.python", "charliermarsh.ruff"]}
+  }
+}

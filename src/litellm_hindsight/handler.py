@@ -1,0 +1,195 @@
+"""LiteLLM proxy callback that routes every tagged request through Hindsight.
+
+Before the call: resolve the request's tags to banks, recall from all read
+banks in parallel (once per developer turn, cached for the tool-loop requests
+that follow), and add the memory to the developer's message.
+
+After the call: save the developer's message and the final answer to the
+customer bank. This runs in LiteLLM's success logger, after the response has
+gone back, so the developer never waits for it.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import logging
+import os
+import time
+from collections import OrderedDict
+from typing import Any
+
+from fastapi import HTTPException
+from litellm.integrations.custom_logger import CustomLogger
+
+from .config import ReadTarget, RoutingConfig, load_config
+from .messages import find_turn, format_memory, inject, response_text
+from .routing import Route, RoutingError, collect_tags, resolve
+
+log = logging.getLogger("litellm_hindsight")
+
+METADATA_KEY = "hindsight_memory"
+_CHAT_CALL_TYPES = {"completion", "acompletion", "anthropic_messages", "responses", "aresponses"}
+
+
+class HindsightMemoryHandler(CustomLogger):
+    def __init__(self, config: RoutingConfig | None = None, client: Any = None) -> None:
+        super().__init__()
+        self._config = config
+        self._client = client
+        self._cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
+
+    @property
+    def config(self) -> RoutingConfig:
+        if self._config is None:
+            self._config = load_config()
+        return self._config
+
+    @property
+    def client(self) -> Any:
+        if self._client is None:
+            from hindsight_client import Hindsight
+
+            self._client = Hindsight(
+                base_url=os.environ.get("HINDSIGHT_API_URL", "http://localhost:8888"),
+                api_key=os.environ.get("HINDSIGHT_API_KEY") or None,
+                timeout=float(os.environ.get("HINDSIGHT_CLIENT_TIMEOUT", "30")),
+                user_agent="litellm-hindsight-memory",
+            )
+        return self._client
+
+    # ---- before the call ---------------------------------------------------
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data: dict, call_type) -> dict:
+        if call_type not in _CHAT_CALL_TYPES:
+            return data
+        try:
+            route = resolve(collect_tags(data), self.config)
+        except RoutingError as exc:
+            raise HTTPException(status_code=400, detail=f"hindsight memory routing: {exc}") from exc
+        if route is None:
+            return data
+
+        messages = data.get("messages")
+        turn = find_turn(messages)
+        if turn is None:
+            return data
+
+        key = _turn_key(route, turn.text)
+        memory = self._cache_get(key)
+        recalled = False
+        if memory is None:
+            memory = await self._recall(route, turn.text)
+            self._cache_put(key, memory)
+            recalled = True
+        if memory:
+            inject(messages, turn, memory)
+
+        _metadata(data)[METADATA_KEY] = {
+            "customer": route.customer,
+            "project": route.project,
+            "write_bank": route.write_bank,
+            "retain_tags": list(route.retain_tags),
+            "turn_key": key,
+            "user_text": turn.text,
+            "recalled": recalled,
+        }
+        return data
+
+    async def _recall(self, route: Route, query: str) -> str:
+        started = time.perf_counter()
+        results = await asyncio.gather(
+            *(self._recall_one(target, query) for target in route.reads), return_exceptions=True
+        )
+        sections: list[tuple[str, list[str]]] = []
+        for target, result in zip(route.reads, results):
+            if isinstance(result, BaseException):
+                log.warning("hindsight recall from %s skipped: %r", target.bank, result)
+                continue
+            sections.append((target.bank, result))
+        log.info(
+            "hindsight recall customer=%s project=%s banks=%d facts=%d took=%.0fms",
+            route.customer, route.project, len(route.reads),
+            sum(len(facts) for _, facts in sections), (time.perf_counter() - started) * 1000,
+        )
+        if not any(facts for _, facts in sections):
+            return ""
+        return format_memory(sections, route.customer, route.project)
+
+    async def _recall_one(self, target: ReadTarget, query: str) -> list[str]:
+        kwargs: dict[str, Any] = {"budget": target.budget, "max_tokens": target.max_tokens}
+        if target.tags:
+            kwargs.update(tags=list(target.tags), tags_match=target.tags_match)
+        response = await asyncio.wait_for(
+            self.client.arecall(bank_id=target.bank, query=query, **kwargs),
+            timeout=self.config.recall_timeout,
+        )
+        return [r.text for r in (response.results or []) if getattr(r, "text", None)]
+
+    # ---- after the call ----------------------------------------------------
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        if not self.config.retain_enabled:
+            return
+        info = _find_route_info(kwargs)
+        if not info:
+            return
+        answer, is_final = response_text(response_obj)
+        if not is_final or not answer:
+            return
+        content = f"Developer: {info['user_text']}\n\nAssistant: {answer}"
+        limit = self.config.retain_max_chars
+        if len(content) > limit:
+            content = content[:limit]
+        try:
+            await self.client.aretain(
+                bank_id=info["write_bank"],
+                content=content,
+                context="Developer conversation through the LiteLLM proxy",
+                document_id=f"turn:{info['turn_key']}",
+                tags=info["retain_tags"],
+                metadata={"source": "litellm-proxy", "model": str(kwargs.get("model", ""))},
+                retain_async=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - memory must never fail a request
+            log.warning("hindsight retain into %s failed: %r", info["write_bank"], exc)
+
+    # ---- turn cache ----------------------------------------------------------
+
+    def _cache_get(self, key: str) -> str | None:
+        entry = self._cache.get(key)
+        if entry is None:
+            return None
+        stored_at, memory = entry
+        if time.monotonic() - stored_at > self.config.cache_ttl:
+            self._cache.pop(key, None)
+            return None
+        self._cache.move_to_end(key)
+        return memory
+
+    def _cache_put(self, key: str, memory: str) -> None:
+        self._cache[key] = (time.monotonic(), memory)
+        self._cache.move_to_end(key)
+        while len(self._cache) > self.config.cache_size:
+            self._cache.popitem(last=False)
+
+
+def _turn_key(route: Route, text: str) -> str:
+    raw = "\x00".join((route.customer, route.project or "", text))
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+def _metadata(data: dict) -> dict:
+    key = "litellm_metadata" if isinstance(data.get("litellm_metadata"), dict) else "metadata"
+    if not isinstance(data.get(key), dict):
+        data[key] = {}
+    return data[key]
+
+
+def _find_route_info(kwargs: dict) -> dict | None:
+    params = kwargs.get("litellm_params") or {}
+    for container in (params.get("metadata"), params.get("litellm_metadata"),
+                      kwargs.get("metadata"), kwargs.get("litellm_metadata")):
+        if isinstance(container, dict) and isinstance(container.get(METADATA_KEY), dict):
+            return container[METADATA_KEY]
+    return None

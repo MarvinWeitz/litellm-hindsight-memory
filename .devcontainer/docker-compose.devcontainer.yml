@@ -1,0 +1,10 @@
+services:
+  workspace:
+    image: mcr.microsoft.com/devcontainers/python:3.12
+    volumes:
+      - ..:/workspace:cached
+    environment:
+      LITELLM_URL: http://litellm:4000
+      HINDSIGHT_API_URL: http://hindsight:8888
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev}
+    command: sleep infinity

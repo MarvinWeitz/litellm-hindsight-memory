@@ -1,0 +1,60 @@
+# Local stack: LiteLLM proxy with the Hindsight memory plugin, Hindsight, Postgres.
+# Copy .env.example to .env and set at least one provider key, then:
+#   docker compose up -d --build
+name: litellm-hindsight
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: hindsight
+      POSTGRES_PASSWORD: hindsight
+      POSTGRES_DB: hindsight
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hindsight"]
+      interval: 5s
+      retries: 20
+
+  hindsight:
+    image: ghcr.io/vectorize-io/hindsight:1.1.0
+    shm_size: 1g
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      HINDSIGHT_API_DATABASE_URL: postgresql://hindsight:hindsight@postgres:5432/hindsight
+      # Hindsight's own extraction calls go through the proxy too. They carry no
+      # customer tag, so the memory plugin lets them pass untouched.
+      HINDSIGHT_API_LLM_PROVIDER: openai
+      HINDSIGHT_API_LLM_BASE_URL: http://litellm:4000/v1
+      HINDSIGHT_API_LLM_API_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev}
+      HINDSIGHT_API_LLM_MODEL: hindsight-extraction
+      HINDSIGHT_API_WORKER_ID: local-dev
+      # CPU-friendly reranking, as Hindsight's performance guide suggests.
+      HINDSIGHT_API_RERANKER_MAX_CANDIDATES: ${HINDSIGHT_RERANKER_MAX_CANDIDATES:-100}
+      HINDSIGHT_CP_DATAPLANE_API_URL: http://localhost:8888
+    ports:
+      - "8888:8888"   # API
+      - "9999:9999"   # Control plane UI
+
+  litellm:
+    build:
+      context: .
+      dockerfile: docker/litellm.Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev}
+      HINDSIGHT_API_URL: http://hindsight:8888
+      HINDSIGHT_ROUTING_CONFIG: /app/config/hindsight_routing.yaml
+    volumes:
+      - ./config:/app/config:ro
+      - ./src/litellm_hindsight:/usr/local/lib/python3.12/site-packages/litellm_hindsight:ro
+    ports:
+      - "4000:4000"
+
+volumes:
+  pgdata:
