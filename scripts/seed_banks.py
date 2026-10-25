@@ -104,11 +104,14 @@ def main() -> None:
         )
         print(f"configured {bank_id}")
 
-    if args.no_memories:
-        return
-    for bank_id, tags, text in SAMPLE_MEMORIES:
-        client.retain(bank_id, text, tags=tags, context="seed data", metadata={"source": "seed"})
-        print(f"retained into {bank_id}: {text[:60]}...")
+    try:
+        if args.no_memories:
+            return
+        for bank_id, tags, text in SAMPLE_MEMORIES:
+            client.retain(bank_id, text, tags=tags, context="seed data", metadata={"source": "seed"})
+            print(f"retained into {bank_id}: {text[:60]}...")
+    finally:
+        client.close()
 
 
 if __name__ == "__main__":
