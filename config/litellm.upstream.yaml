@@ -1,0 +1,23 @@
+# Upstream mode: no provider keys. Every model is forwarded to an existing
+# LiteLLM proxy (for example your company's) with your SSO token, and this
+# local proxy adds the Hindsight memory on the way.
+# Select it with LITELLM_CONFIG=litellm.upstream.yaml in .env.
+model_list:
+  # Offline model for smoke tests and latency runs; stays local.
+  - model_name: mock
+    litellm_params:
+      model: openai/mock
+      api_key: fake
+      mock_response: "This is a mock answer from the local proxy."
+  # Everything else goes upstream under the same model name.
+  - model_name: "*"
+    litellm_params:
+      model: "litellm_proxy/*"
+      api_base: os.environ/UPSTREAM_LITELLM_URL
+      api_key: os.environ/UPSTREAM_LITELLM_KEY
+
+litellm_settings:
+  callbacks: litellm_hindsight.proxy_handler_instance
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
