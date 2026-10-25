@@ -27,6 +27,14 @@ from .messages import find_turn, format_memory, inject, response_text
 from .routing import Route, RoutingError, collect_tags, resolve
 
 log = logging.getLogger("litellm_hindsight")
+if os.environ.get("HINDSIGHT_LOG_LEVEL"):
+    # LiteLLM doesn't configure third-party loggers, so info lines would be dropped.
+    log.setLevel(os.environ["HINDSIGHT_LOG_LEVEL"].upper())
+    if not log.handlers:
+        _handler = logging.StreamHandler()
+        _handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+        log.addHandler(_handler)
+        log.propagate = False
 
 METADATA_KEY = "hindsight_memory"
 RETAIN_CONTEXT = (
@@ -161,6 +169,7 @@ class HindsightMemoryHandler(CustomLogger):
                 metadata={"source": "litellm-proxy", "model": str(kwargs.get("model", ""))},
                 retain_async=True,
             )
+            log.info("hindsight retain into %s tags=%s chars=%d", info["write_bank"], info["retain_tags"], len(content))
         except Exception as exc:  # noqa: BLE001 - memory must never fail a request
             log.warning("hindsight retain into %s failed: %r", info["write_bank"], exc)
 

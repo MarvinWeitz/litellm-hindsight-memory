@@ -70,7 +70,7 @@ Routing lives in [`config/hindsight_routing.yaml`](config/hindsight_routing.yaml
 - `untagged_request: reject` to require a customer tag on every request,
 - recall timeout (default 0.8 s, fail open) and the per-turn cache.
 
-Point `HINDSIGHT_ROUTING_CONFIG` at the file. `HINDSIGHT_API_URL` and `HINDSIGHT_API_KEY` set the Hindsight connection.
+Point `HINDSIGHT_ROUTING_CONFIG` at the file. `HINDSIGHT_API_URL` and `HINDSIGHT_API_KEY` set the Hindsight connection. `HINDSIGHT_LOG_LEVEL=INFO` logs one line per recall (banks, facts, milliseconds) and per retain. The local stack sets it.
 
 ## How it keeps latency down
 
