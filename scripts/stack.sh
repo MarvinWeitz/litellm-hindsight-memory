@@ -12,7 +12,7 @@ wait_for() {
   local name=$1 url=$2 tries=${3:-180}
   printf 'waiting for %s ' "$name"
   for _ in $(seq "$tries"); do
-    if curl -fsS -o /dev/null "$url"; then echo ' ready'; return 0; fi
+    if curl -fs -o /dev/null "$url"; then echo ' ready'; return 0; fi
     printf '.'; sleep 2
   done
   echo ' timed out'; return 1
