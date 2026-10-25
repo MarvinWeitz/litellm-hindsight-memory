@@ -2,6 +2,7 @@
 
 1. harvest   reflect over each customer bank (per domain) and collect nominated facts
 2. anonymize rewrite each candidate generically, drop what can't be generalized or still leaks
+   triage    merge duplicates, score, keep a short list per bank (see triage.py)
 3. stage     retain candidates into the staging bank, source customer in metadata only
 4. review    a person edits the review file: approve, reject, fix the text, set the SAP release
 5. publish   retain approved items into the global bank under a stable topic id, then mark
@@ -20,13 +21,15 @@ from pathlib import Path
 
 import yaml
 
+from . import triage
 from .anonymize import Anonymizer, leaks
 from .config import PromotionConfig
+from .llm import LLM
 from .store import HindsightStore
 
 NOMINATED, DONE, REJECTED = "promote:candidate", "promote:done", "promote:rejected"
-STAGED, PUBLISHED = "promote:staged", "promote:published"
-DECISIONS = ("pending", "approve", "reject")
+STAGED, FILTERED, PUBLISHED = "promote:staged", "promote:filtered", "promote:published"
+DECISIONS = ("pending", "filtered", "approve", "reject")
 
 REFLECT_SCHEMA = {
     "type": "object",
@@ -59,25 +62,35 @@ class Candidate:
     kind: str = ""
     topic_id: str = ""
     reason: str = ""
+    nominated: bool = False
+    score: int = 0
+    triage_note: str = ""
 
 
 @dataclass
 class HarvestResult:
     harvest_id: str
     candidates: list[Candidate] = field(default_factory=list)
-    dropped: list[tuple[Candidate, str]] = field(default_factory=list)
+    filtered: list[tuple[Candidate, str]] = field(default_factory=list)  # reviewable, with the reason
+    dropped: list[tuple[Candidate, str]] = field(default_factory=list)   # never reach review: leaks, not generic
 
 
-def harvest(store: HindsightStore, anonymizer: Anonymizer, cfg: PromotionConfig, *,
+def harvest(store: HindsightStore, anonymizer: Anonymizer, cfg: PromotionConfig, *, llm: LLM | None = None,
             banks: list[str] | None = None, progress: Callable[[str], None] = lambda _: None) -> HarvestResult:
+    """Collect and anonymize candidates; with an llm and triage enabled, also merge, score and cap them."""
     result = HarvestResult(harvest_id=datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S"))
     customer_banks = [b for b in store.bank_ids() if b.startswith(cfg.customer_prefix)]
     customers = [b[len(cfg.customer_prefix):] for b in customer_banks]
+    use_triage = cfg.triage and llm is not None
+    global_ready = use_triage and cfg.global_bank in store.bank_ids()
     for bank in customer_banks:
         if banks and bank not in banks:
             continue
         raw, projects = _collect(store, cfg, bank, progress)
+        if use_triage:
+            raw = triage.merge(llm, raw, lambda msg, bank=bank: progress(f"{bank}  {msg}"))
         forbidden = customers + projects + list(cfg.blocklist)
+        kept = []
         for i, cand in enumerate(raw, 1):
             progress(f"{bank}  anonymizing {i}/{len(raw)}")
             rw = anonymizer.rewrite(cand.original)
@@ -87,7 +100,21 @@ def harvest(store: HindsightStore, anonymizer: Anonymizer, cfg: PromotionConfig,
             elif found := leaks(rw.text, forbidden):
                 result.dropped.append((cand, f"still names {', '.join(found)}"))
             else:
-                result.candidates.append(cand)
+                kept.append(cand)
+        if not use_triage:
+            result.candidates += kept
+            continue
+        judged = []
+        for i, cand in enumerate(kept, 1):
+            progress(f"{bank}  scoring {i}/{len(kept)}")
+            verdict = triage.judge(llm, store, cfg, cand, global_ready=global_ready)
+            cand.score = triage.score(verdict, len(cand.source_documents))
+            cand.triage_note = verdict.reason
+            judged.append((cand, verdict))
+        shortlist, filtered = triage.shortlist(cfg, judged)
+        result.candidates += shortlist
+        result.filtered += filtered
+        progress(f"{bank}  {len(shortlist)} for review, {len(filtered)} filtered")
     return result
 
 
@@ -104,17 +131,20 @@ def _collect(store: HindsightStore, cfg: PromotionConfig, bank: str,
     seen: dict[str, Candidate] = {}
     projects: set[str] = set()
 
-    def add(text: str, facts: list[dict], domain: str | None) -> None:
+    def add(text: str, facts: list[dict], domain: str | None, nominated: bool = False) -> None:
         facts = [f for f in facts if not {DONE, REJECTED} & set(f["tags"])]
         projects.update(t[len("project:"):] for f in facts for t in f["tags"]
                         if t.startswith("project:") and t != "project:_shared")
         key = _key(bank, text)
+        if key in seen:
+            seen[key].nominated |= nominated
         if not text.strip() or not facts or key in seen:
             return
         seen[key] = Candidate(
             id=key, source_bank=bank, domain=domain or _domain_of(facts), original=" ".join(text.split()),
             source_facts=sorted({f["id"] for f in facts}),
             source_documents=sorted({f["document_id"] for f in facts if f["document_id"]}),
+            nominated=nominated,
         )
 
     for domain, tags in passes:
@@ -133,16 +163,17 @@ def _collect(store: HindsightStore, cfg: PromotionConfig, bank: str,
             add(str(item.get("text", "")), cited or facts, domain)
         progress(f"{bank}  {label}: {len(seen) - before} new candidates ({time.monotonic() - started:.0f} s)")
     for fact in store.memories(bank, [NOMINATED]):
-        add(fact["text"], [fact], None)
+        add(fact["text"], [fact], None, nominated=True)
     return list(seen.values()), sorted(projects)
 
 
 def stage(store: HindsightStore, cfg: PromotionConfig, result: HarvestResult) -> None:
     store.ensure_bank(cfg.staging_bank, "Keep each promotion candidate as one fact, worded as given.")
-    for c in result.candidates:
+    # Filtered candidates are staged too, so a reviewer who rescues one can close its loop.
+    for c, status in [(c, STAGED) for c in result.candidates] + [(c, FILTERED) for c, _ in result.filtered]:
         store.retain(
             cfg.staging_bank, c.text, document_id=f"candidate:{c.id}",
-            tags=[STAGED, f"kind:{c.kind}"] + ([f"domain:{c.domain}"] if c.domain else []),
+            tags=[status, f"kind:{c.kind}"] + ([f"domain:{c.domain}"] if c.domain else []),
             metadata={"source_bank": c.source_bank, "source_documents": ",".join(c.source_documents),
                       "topic_id": c.topic_id, "harvest_id": result.harvest_id},
             context="Promotion candidate waiting for review",
@@ -152,19 +183,26 @@ def stage(store: HindsightStore, cfg: PromotionConfig, result: HarvestResult) ->
 def write_review(result: HarvestResult, directory: Path) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{result.harvest_id}.yaml"
-    items = [{
-        "id": c.id, "decision": "pending", "sap_release": "",
-        "topic_id": c.topic_id, "kind": c.kind, "domain": c.domain, "text": c.text,
-        "original": c.original, "why": c.reason,
-        "source": {"bank": c.source_bank, "documents": c.source_documents, "facts": c.source_facts},
-    } for c in result.candidates]
+    def entry(c: Candidate, decision: str, **extra) -> dict:
+        return {
+            "id": c.id, "decision": decision, "sap_release": "",
+            "topic_id": c.topic_id, "kind": c.kind, "domain": c.domain, "text": c.text, **extra,
+            "original": c.original, "why": c.reason,
+            "source": {"bank": c.source_bank, "documents": c.source_documents, "facts": c.source_facts},
+        }
+
+    items = [entry(c, "pending", score=c.score, nominated=c.nominated, assessment=c.triage_note)
+             for c in result.candidates]
+    filtered = [entry(c, "filtered", score=c.score, filtered_because=why) for c, why in result.filtered]
     header = (
         "# Promotion review. For each item set decision to approve or reject.\n"
+        "# 'items' is the short list. 'filtered' holds what triage set aside, with the reason; leave those\n"
+        "# alone, or set decision approve on one to publish it anyway.\n"
         "# Approve needs sap_release (the release you verified it on) and a topic_id like pattern:cap-xsuaa-prod-auth.\n"
         "# Edit text freely; only text, topic_id, kind, domain and sap_release reach the global bank.\n"
         "# 'original' and 'source' hold customer data: this file stays local and is never committed.\n"
     )
-    path.write_text(header + yaml.safe_dump({"harvest_id": result.harvest_id, "items": items},
+    path.write_text(header + yaml.safe_dump({"harvest_id": result.harvest_id, "items": items, "filtered": filtered},
                                             sort_keys=False, allow_unicode=True, width=100))
     return path
 
@@ -174,6 +212,7 @@ class PublishReport:
     published: list[str] = field(default_factory=list)
     rejected: list[str] = field(default_factory=list)
     pending: list[str] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
 
@@ -182,12 +221,14 @@ def publish(store: HindsightStore, cfg: PromotionConfig, review_file: Path, *, d
     customers = [b[len(cfg.customer_prefix):] for b in store.bank_ids() if b.startswith(cfg.customer_prefix)]
     forbidden = customers + list(cfg.blocklist)
     report = PublishReport()
-    for item in data.get("items") or ():
+    for item in [*(data.get("items") or ()), *(data.get("filtered") or ())]:
         decision = str(item.get("decision", "pending")).strip().lower()
         if decision not in DECISIONS:
             report.errors.append(f"{item.get('id')}: unknown decision {decision!r}")
         elif decision == "pending":
             report.pending.append(item["id"])
+        elif decision == "filtered":
+            report.skipped.append(item["id"])
         elif decision == "reject":
             if not dry_run:
                 _close(store, cfg, item, REJECTED)
@@ -233,7 +274,7 @@ def _close(store: HindsightStore, cfg: PromotionConfig, item: dict, outcome: str
     for doc in source.get("documents") or ():
         store.retag_document(source["bank"], doc, add=[outcome], remove=[NOMINATED])
     staged = PUBLISHED if outcome == DONE else REJECTED
-    store.retag_document(cfg.staging_bank, f"candidate:{item['id']}", add=[staged], remove=[STAGED])
+    store.retag_document(cfg.staging_bank, f"candidate:{item['id']}", add=[staged], remove=[STAGED, FILTERED])
 
 
 def nominate(store: HindsightStore, bank: str, document_id: str) -> None:
@@ -253,8 +294,11 @@ def _domain_of(facts: list[dict]) -> str | None:
 
 
 def summary(result: HarvestResult) -> str:
-    lines = [f"harvest {result.harvest_id}: {len(result.candidates)} candidates, {len(result.dropped)} dropped"]
-    lines += [f"  + [{c.kind}] {c.topic_id or '(no topic)'}: {c.text[:90]}" for c in result.candidates]
+    lines = [(f"harvest {result.harvest_id}: {len(result.candidates)} for review, {len(result.filtered)} filtered, "
+              f"{len(result.dropped)} dropped")]
+    lines += [f"  + [{c.kind}] {c.topic_id or '(no topic)'}{f' score {c.score}' if c.score else ''}: {c.text[:90]}"
+              for c in result.candidates]
+    lines += [f"  ~ {c.topic_id or c.text[:40]}  ({why[:90]})" for c, why in result.filtered]
     lines += [f"  - {c.original[:70]}  ({why})" for c, why in result.dropped]
     return "\n".join(lines)
 

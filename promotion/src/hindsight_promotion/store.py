@@ -43,6 +43,11 @@ class HindsightStore:
         ]
         return r.structured_output or {}, facts
 
+    def recall(self, bank_id: str, query: str, *, limit: int = 3) -> list[dict]:
+        """The closest memories in a bank, each with the document (topic id) it belongs to."""
+        r = self.client.recall(bank_id, query, max_tokens=1024, budget="low")
+        return [{"id": m.id, "text": m.text or "", "document_id": m.document_id} for m in (r.results or [])[:limit]]
+
     def has_memories(self, bank_id: str, tags: list[str]) -> bool:
         return self.client.list_memories(bank_id, tags=tags, tags_match="any_strict", limit=1).total > 0
 

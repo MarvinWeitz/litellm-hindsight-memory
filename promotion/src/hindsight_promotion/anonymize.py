@@ -8,11 +8,10 @@ last line of defense.
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 
-import httpx
+from .llm import LLM, parse_json
 
 PROMPT = """You prepare SAP CAP/BTP knowledge for a knowledge base shared across all customers.
 
@@ -42,28 +41,17 @@ class Rewrite:
 
 
 class Anonymizer:
-    def __init__(self, base_url: str, model: str, api_key: str | None, kinds: tuple[str, ...]):
-        if not model:
-            raise ValueError("no model for anonymization: set HINDSIGHT_LLM_MODEL or anonymize.model")
-        self.model, self.kinds = model, kinds
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        self.http = httpx.Client(base_url=base_url, headers=headers, timeout=120)
+    def __init__(self, llm: LLM, kinds: tuple[str, ...]):
+        self.llm, self.kinds = llm, kinds
 
     def rewrite(self, text: str) -> Rewrite:
-        r = self.http.post("/chat/completions", json={
-            "model": self.model,
-            "messages": [{"role": "user", "content": PROMPT.format(text=text, kinds=list(self.kinds))}],
-            "response_format": {"type": "json_object"},
-        })
-        r.raise_for_status()
-        return parse(r.json()["choices"][0]["message"]["content"], self.kinds)
+        return parse(self.llm.text(PROMPT.format(text=text, kinds=list(self.kinds)), json_mode=True), self.kinds)
 
 
 def parse(raw: str, kinds: tuple[str, ...]) -> Rewrite:
     """Read the model's JSON; anything malformed counts as not generic."""
-    try:
-        data = json.loads(raw[raw.find("{"): raw.rfind("}") + 1])
-    except ValueError:
+    data = parse_json(raw)
+    if data is None:
         return Rewrite(False, "", "", "", "model answer was not JSON")
     kind = str(data.get("kind", "")).strip()
     topic = str(data.get("topic_id", "")).strip().lower()
