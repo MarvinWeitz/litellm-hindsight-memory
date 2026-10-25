@@ -1,7 +1,7 @@
 import pytest
+from conftest import make_config
 from fastapi import HTTPException
 
-from litellm_hindsight.config import RoutingConfig
 from litellm_hindsight.handler import METADATA_KEY, HindsightMemoryHandler
 
 
@@ -68,7 +68,7 @@ async def test_tool_loop_requests_reuse_the_turn_recall(config, fake_hindsight):
 
 
 async def test_slow_bank_times_out_without_failing(fake_hindsight):
-    cfg = RoutingConfig.from_dict({"recall": {"timeout_seconds": 0.05}})
+    cfg = make_config(recall={"timeout_seconds": 0.05})
     fake_hindsight.delay["global::sap"] = 1
     handler = HindsightMemoryHandler(cfg, fake_hindsight)
     data = await handler.async_pre_call_hook(None, None, _request("auth?", ["customer:acme", "project:acme-portal"]), "acompletion")

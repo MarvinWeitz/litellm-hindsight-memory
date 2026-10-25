@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -18,13 +17,11 @@ from .llm import LLM
 from .store import HindsightStore
 from .workflow import harvest, nominate, publish, stage, summary, write_review
 
-REVIEW_DIR = Path(os.environ.get("PROMOTION_REVIEW_DIR", Path(__file__).parents[2] / "review"))
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="hindsight_promotion", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--config", help="promotion.yaml (default: $PROMOTION_CONFIG or the bundled one)")
+    parser.add_argument("--config", help="promotion.yaml (or set PROMOTION_CONFIG)")
     sub = parser.add_subparsers(dest="command", required=True)
     h = sub.add_parser("harvest", help="find, anonymize and stage candidates")
     h.add_argument("--dry-run", action="store_true", help="print candidates; stage nothing, write no file")
@@ -39,18 +36,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
-    store = HindsightStore(os.environ.get("HINDSIGHT_API_URL", "http://localhost:8888"),
-                           os.environ.get("HINDSIGHT_API_KEY") or None)
+    store = HindsightStore(cfg.hindsight_url, cfg.hindsight_api_key, timeout=cfg.hindsight_timeout)
     try:
         if args.command == "harvest":
-            llm = LLM(cfg.llm_base_url, cfg.llm_model, cfg.llm_api_key)
-            result = harvest(store, Anonymizer(llm, cfg.kinds), cfg, llm=None if args.no_triage else llm,
+            llm = LLM(cfg.llm_base_url, cfg.llm_model, cfg.llm_api_key, timeout=cfg.llm_timeout)
+            result = harvest(store, Anonymizer(llm, cfg.kinds, cfg.subject), cfg, llm=None if args.no_triage else llm,
                              banks=args.bank,
                              progress=lambda msg: print(msg, file=sys.stderr, flush=True))
             print(summary(result))
             if not args.dry_run and (result.candidates or result.filtered):
                 stage(store, cfg, result)
-                path = write_review(result, REVIEW_DIR)
+                path = write_review(result, cfg.review_dir)
                 print(f"\nstaged in {cfg.staging_bank}. Review and decide in:\n  {path}")
         elif args.command == "publish":
             report = publish(store, cfg, args.review_file, dry_run=args.dry_run)
@@ -62,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"error {e}", file=sys.stderr)
             return 1 if report.errors else 0
         elif args.command == "nominate":
-            nominate(store, args.bank, args.document_id)
+            nominate(store, cfg, args.bank, args.document_id)
             print(f"{args.document_id} in {args.bank} is nominated for the next harvest")
     finally:
         store.close()

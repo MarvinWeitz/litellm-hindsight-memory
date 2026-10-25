@@ -12,12 +12,12 @@ import httpx
 
 
 class LLM:
-    def __init__(self, base_url: str, model: str | None, api_key: str | None):
+    def __init__(self, base_url: str, model: str | None, api_key: str | None, *, timeout: float):
         if not model:
-            raise ValueError("no model for the promotion job: set HINDSIGHT_LLM_MODEL or anonymize.model")
+            raise ValueError("no model for the promotion job: set llm.model, or the variable llm.model_env names")
         self.model = model
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        self.http = httpx.Client(base_url=base_url, headers=headers, timeout=120)
+        self.http = httpx.Client(base_url=base_url, headers=headers, timeout=timeout)
 
     def json(self, prompt: str) -> dict | None:
         """The model's JSON answer, or None if it wasn't JSON."""

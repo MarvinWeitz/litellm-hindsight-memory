@@ -15,9 +15,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-MEMORY_OPEN = "<hindsight_memory>"
-MEMORY_CLOSE = "</hindsight_memory>"
-
 
 @dataclass(frozen=True)
 class Turn:
@@ -25,13 +22,17 @@ class Turn:
     text: str  # that message's text, without any memory block we added
 
 
-def find_turn(messages: list[dict[str, Any]] | None) -> Turn | None:
-    """Return the last user message that carries text a developer typed."""
+def find_turn(messages: list[dict[str, Any]] | None, marker: str) -> Turn | None:
+    """Return the last user message that carries text a developer typed.
+
+    ``marker`` names the memory block (``<marker>...</marker>``) so a block added
+    on an earlier request of the same turn is not mistaken for developer text.
+    """
     for index in range(len(messages or ()) - 1, -1, -1):
         message = messages[index]
         if message.get("role") != "user":
             continue
-        text = _text_of(message.get("content"))
+        text = _text_of(message.get("content"), marker)
         if text:
             return Turn(index=index, text=text)
     return None
@@ -50,19 +51,14 @@ def inject(messages: list[dict[str, Any]], turn: Turn, memory: str) -> None:
     messages[turn.index] = message
 
 
-def format_memory(sections: list[tuple[str, list[str]]], customer: str, project: str | None) -> str:
-    """Render recalled facts per bank into one tagged block for the model."""
-    scope = f"customer {customer}" + (f", project {project}" if project else "")
-    lines = [
-        MEMORY_OPEN,
-        f"Memory recalled from earlier work ({scope}). Use it when it is relevant. "
-        "If it conflicts with the conversation or the code, trust the conversation and the code.",
-    ]
+def format_memory(sections: list[tuple[str, list[str]]], header: str, marker: str) -> str:
+    """Render recalled facts per bank into one ``<marker>`` block for the model."""
+    lines = [f"<{marker}>", header.strip()]
     for bank, facts in sections:
         if facts:
             lines.append(f"\n## {bank}")
             lines.extend(f"- {fact}" for fact in facts)
-    lines.append(MEMORY_CLOSE)
+    lines.append(f"</{marker}>")
     return "\n".join(lines)
 
 
@@ -88,29 +84,32 @@ def response_text(response: Any) -> tuple[str, bool]:
     return "", False
 
 
-def _text_of(content: Any) -> str:
+def _text_of(content: Any, marker: str | None = None) -> str:
     if isinstance(content, str):
-        return _strip_memory(content).strip()
+        return _strip_memory(content, marker).strip()
     if isinstance(content, list):
         parts = []
         for block in content:
             block = _as_dict(block)
             if block.get("type") == "text" and isinstance(block.get("text"), str):
-                text = _strip_memory(block["text"]).strip()
+                text = _strip_memory(block["text"], marker).strip()
                 if text:
                     parts.append(text)
         return "\n\n".join(parts)
     return ""
 
 
-def _strip_memory(text: str) -> str:
-    start = text.find(MEMORY_OPEN)
+def _strip_memory(text: str, marker: str | None) -> str:
+    if not marker:
+        return text
+    open_tag, close_tag = f"<{marker}>", f"</{marker}>"
+    start = text.find(open_tag)
     if start == -1:
         return text
-    end = text.find(MEMORY_CLOSE, start)
+    end = text.find(close_tag, start)
     if end == -1:
         return text
-    return text[:start] + text[end + len(MEMORY_CLOSE):]
+    return text[:start] + text[end + len(close_tag):]
 
 
 def _as_dict(obj: Any) -> dict[str, Any]:

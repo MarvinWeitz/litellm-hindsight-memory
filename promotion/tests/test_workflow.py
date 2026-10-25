@@ -3,12 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
-
 from hindsight_promotion.anonymize import Rewrite, leaks, parse
 from hindsight_promotion.config import load_config
 from hindsight_promotion.workflow import harvest, nominate, publish, stage, write_review
 
-CFG = load_config(Path(__file__).parents[1] / "promotion.yaml")
+CONFIG_FILE = Path(__file__).parents[1] / "promotion.yaml"
+CFG = load_config(CONFIG_FILE, env={"HINDSIGHT_API_URL": "http://hindsight.test", "HINDSIGHT_LLM_MODEL": "m"})
 
 PORTAL_FACT = {"id": "f1", "text": "Acme portal: CAP must use cds.requires.auth.kind xsuaa in production.",
                "tags": ["project:acme-portal", "domain:cap"], "document_id": "turn:a"}
@@ -149,7 +149,7 @@ def test_reject_marks_source_and_dry_run_writes_nothing(tmp_path):
 
 def test_nominate_adds_tag():
     store = FakeStore()
-    nominate(store, "customer::acme", "turn:a")
+    nominate(store, CFG, "customer::acme", "turn:a")
     assert store.doc_tags[("customer::acme", "turn:a")] == ["project:acme-portal", "promote:candidate"]
 
 
@@ -160,3 +160,37 @@ def test_parse_and_leaks():
     assert leaks("Acme's portal", ["acme"]) == ["acme"]
     assert leaks("acme-portal", ["acme"]) == ["acme"]
     assert leaks("macmexx", ["acme"]) == []
+
+
+def test_config_has_no_defaults():
+    import pytest
+    from hindsight_promotion.config import ConfigError, PromotionConfig
+
+    raw = yaml.safe_load(CONFIG_FILE.read_text())
+    env = {"HINDSIGHT_API_URL": "http://h"}
+    del raw["tags"]["lifecycle"]["done"]
+    with pytest.raises(ConfigError, match="lifecycle.done is required"):
+        PromotionConfig.from_dict(raw, env=env)
+    raw = yaml.safe_load(CONFIG_FILE.read_text())
+    raw["triage"]["max_per_bnk"] = 3
+    with pytest.raises(ConfigError, match="unknown key"):
+        PromotionConfig.from_dict(raw, env=env)
+    with pytest.raises(ConfigError, match="HINDSIGHT_API_URL"):
+        PromotionConfig.from_dict(yaml.safe_load(CONFIG_FILE.read_text()), env={})
+
+
+def test_custom_scope_prefix_is_blocked_from_the_global_bank():
+    from dataclasses import replace
+
+    store = FakeStore()
+    store.doc_tags = {}
+    fact = {**PORTAL_FACT, "tags": ["repo:acme-portal", "domain:cap"]}
+    store.reflect = lambda *a, **k: ({"candidates": [{"text": fact["text"], "source_fact_ids": ["f1"]}]}, [fact])
+    store.nominated = []
+
+    class Echo:
+        def rewrite(self, text):
+            return Rewrite(True, "Use acme-portal style auth in production.", "pattern", "pattern:x-auth", "")
+
+    result = harvest(store, Echo(), replace(CFG, scope_prefix="repo:"))
+    assert not result.candidates and "acme-portal" in result.dropped[0][1]

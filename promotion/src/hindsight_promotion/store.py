@@ -12,10 +12,10 @@ from hindsight_client import Hindsight
 
 
 class HindsightStore:
-    def __init__(self, base_url: str, api_key: str | None = None):
-        self.client = Hindsight(base_url=base_url, api_key=api_key)
+    def __init__(self, base_url: str, api_key: str | None, *, timeout: float):
+        self.client = Hindsight(base_url=base_url, api_key=api_key, timeout=timeout)
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        self.http = httpx.Client(base_url=base_url.rstrip("/") + "/v1/default", headers=headers, timeout=60)
+        self.http = httpx.Client(base_url=base_url.rstrip("/") + "/v1/default", headers=headers, timeout=timeout)
 
     def close(self) -> None:
         self.client.close()

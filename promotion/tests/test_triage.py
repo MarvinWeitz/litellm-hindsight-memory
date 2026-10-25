@@ -106,7 +106,7 @@ def test_harvest_shortlists_and_explains_the_rest():
     assert why["pattern:cap-write-tests"].startswith("the model already knows")
     assert why["pattern:cap-xsuaa-production"].startswith("already in global::sap as pattern:cap-auth")
     # the baseline is asked about the topic id, not the anonymized text
-    assert not any("SAP_BR_BUPA" in p for p in llm.prompts if p.startswith("You are an SAP"))
+    assert not any("SAP_BR_BUPA" in p for p in llm.prompts if p.startswith("You are a developer"))
 
 
 def test_merge_keeps_notes_the_model_left_out_and_ignores_bad_indexes():
@@ -116,7 +116,7 @@ def test_merge_keeps_notes_the_model_left_out_and_ignores_bad_indexes():
         def json(self, prompt):
             return {"groups": [[1, 3, "x", 99], [3]]}
 
-    out = merge(L(), cands)
+    out = merge(L(), cands, CFG.subject)
     assert [c.id for c in out] == ["0", "1"]
     assert out[0].source_documents == ["d0", "d2"]
 

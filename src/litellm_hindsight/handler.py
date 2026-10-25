@@ -37,10 +37,6 @@ if os.environ.get("HINDSIGHT_LOG_LEVEL"):
         log.propagate = False
 
 METADATA_KEY = "hindsight_memory"
-RETAIN_CONTEXT = (
-    "Developer conversation through the LiteLLM proxy. The assistant was given memory recalled "
-    "from this bank, so its answer may repeat known facts: extract only what is new here."
-)
 _CHAT_CALL_TYPES = {"completion", "acompletion", "anthropic_messages", "responses", "aresponses"}
 
 
@@ -62,11 +58,12 @@ class HindsightMemoryHandler(CustomLogger):
         if self._client is None:
             from hindsight_client import Hindsight
 
+            cfg = self.config
             self._client = Hindsight(
-                base_url=os.environ.get("HINDSIGHT_API_URL", "http://localhost:8888"),
-                api_key=os.environ.get("HINDSIGHT_API_KEY") or None,
-                timeout=float(os.environ.get("HINDSIGHT_CLIENT_TIMEOUT", "30")),
-                user_agent="litellm-hindsight-memory",
+                base_url=cfg.hindsight_url,
+                api_key=cfg.hindsight_api_key,
+                timeout=cfg.client_timeout,
+                user_agent=cfg.user_agent,
             )
         return self._client
 
@@ -83,7 +80,7 @@ class HindsightMemoryHandler(CustomLogger):
             return data
 
         messages = data.get("messages")
-        turn = find_turn(messages)
+        turn = find_turn(messages, self.config.memory_marker)
         if turn is None:
             return data
 
@@ -98,8 +95,8 @@ class HindsightMemoryHandler(CustomLogger):
             inject(messages, turn, memory)
 
         _metadata(data)[METADATA_KEY] = {
-            "customer": route.customer,
-            "project": route.project,
+            "bank_value": route.bank_value,
+            "scope_value": route.scope_value,
             "write_bank": route.write_bank,
             "retain_tags": list(route.retain_tags),
             "turn_key": key,
@@ -120,13 +117,14 @@ class HindsightMemoryHandler(CustomLogger):
                 continue
             sections.append((target.bank, result))
         log.info(
-            "hindsight recall customer=%s project=%s banks=%d facts=%d took=%.0fms",
-            route.customer, route.project, len(route.reads),
+            "hindsight recall %s banks=%d facts=%d took=%.0fms",
+            route.label, len(route.reads),
             sum(len(facts) for _, facts in sections), (time.perf_counter() - started) * 1000,
         )
         if not any(facts for _, facts in sections):
             return ""
-        return format_memory(sections, route.customer, route.project)
+        cfg = self.config
+        return format_memory(sections, cfg.memory_header.format(scope=route.label), cfg.memory_marker)
 
     async def _recall_one(self, target: ReadTarget, query: str) -> list[str]:
         kwargs: dict[str, Any] = {"budget": target.budget, "max_tokens": target.max_tokens}
@@ -155,18 +153,19 @@ class HindsightMemoryHandler(CustomLogger):
         answer, is_final = response_text(response_obj)
         if not is_final or not answer:
             return
-        content = f"Developer: {info['user_text']}\n\nAssistant: {answer}"
-        limit = self.config.retain_max_chars
+        cfg = self.config
+        content = cfg.retain_template.format(user=info["user_text"], assistant=answer)
+        limit = cfg.retain_max_chars
         if len(content) > limit:
             content = content[:limit]
         try:
             await self.client.aretain(
                 bank_id=info["write_bank"],
                 content=content,
-                context=RETAIN_CONTEXT,
-                document_id=f"turn:{info['turn_key']}",
+                context=cfg.retain_context,
+                document_id=f"{cfg.retain_document_prefix}{info['turn_key']}",
                 tags=info["retain_tags"],
-                metadata={"source": "litellm-proxy", "model": str(kwargs.get("model", ""))},
+                metadata={**cfg.retain_metadata, "model": str(kwargs.get("model", ""))},
                 retain_async=True,
             )
             log.info("hindsight retain into %s tags=%s chars=%d", info["write_bank"], info["retain_tags"], len(content))
@@ -216,7 +215,7 @@ def _tags_allowed(result_tags: list[str] | None, target: ReadTarget) -> bool:
 
 
 def _turn_key(route: Route, text: str) -> str:
-    raw = "\x00".join((route.customer, route.project or "", text))
+    raw = "\x00".join((route.write_bank, route.scope_value or "", text))
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
