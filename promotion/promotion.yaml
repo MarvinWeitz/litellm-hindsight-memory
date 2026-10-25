@@ -1,11 +1,35 @@
 # Promotion of reusable SAP knowledge from customer banks into global::sap.
 # Separate from the proxy plugin: the plugin only reads global::sap, and this
 # job is the only writer. See promotion/README.md for the workflow.
+#
+# No built-in defaults: every key below is required, and keys that can be
+# switched off take an explicit null. Unknown keys are refused at load time.
+
+hindsight:
+  url_env: HINDSIGHT_API_URL       # environment variable holding the Hindsight API URL
+  api_key_env: HINDSIGHT_API_KEY   # environment variable holding the API key; null = no key
+  timeout_seconds: 60
 
 banks:
   customers: "customer::"          # every bank with this prefix is harvested
   staging: "staging::promotion"    # candidates waiting for review
   global: "global::sap"            # published, reviewed knowledge
+
+tags:
+  # Must match the scope tag of config/hindsight_routing.yaml (tags.scope.prefix and when_missing):
+  # scope values are customer-specific, so they are added to the anonymizer's blocklist.
+  scope_prefix: "project:"
+  shared_scope: "_shared"          # the customer-wide scope value, not a name to block; null = none
+  domain_prefix: "domain:"
+  kind_prefix: "kind:"
+  published: ["source:promotion"]  # extra tags on every item published to the global bank
+  lifecycle:
+    nominated: promote:candidate   # set by `nominate`, picked up by the next harvest
+    done: promote:done             # source document was promoted
+    rejected: promote:rejected     # source document was rejected in review
+    staged: promote:staged         # staged candidate on the short list
+    filtered: promote:filtered     # staged candidate set aside by triage
+    published: promote:published   # staged candidate that reached the global bank
 
 harvest:
   # One reflect per domain value, filtered to facts with that domain tag,
@@ -18,12 +42,17 @@ harvest:
   budget: low   # mid/high read more facts but take much longer per reflect
   max_candidates_per_pass: 10
 
-anonymize:
-  # OpenAI-compatible endpoint, also used by triage. The local LiteLLM proxy works: requests carry
-  # no customer tag, so the memory plugin lets them through untouched.
+llm:
+  # OpenAI-compatible endpoint for anonymization and triage. The local LiteLLM proxy works: requests
+  # carry no customer tag, so the memory plugin lets them through untouched.
   base_url: http://localhost:4000/v1
   api_key_env: LITELLM_MASTER_KEY
+  model: null                      # a fixed model name, or null to read it from model_env
   model_env: HINDSIGHT_LLM_MODEL
+  timeout_seconds: 120
+
+anonymize:
+  subject: "SAP CAP/BTP"           # the knowledge area named in the anonymizer and triage prompts
   # Words that must never reach the global bank, on top of the customer slugs
   # found in bank names. A candidate containing one after anonymization is dropped.
   blocklist: [ACME-DC1]
@@ -38,3 +67,11 @@ triage:
   novelty_check: true   # one extra LLM call per candidate: answer the topic without memory
 
 kinds: [decision, pitfall, pattern, runbook]
+
+review:
+  dir: review           # review files; a relative path is relative to this file
+
+texts:
+  staging_mission: Keep each promotion candidate as one fact, worded as given.
+  staging_context: Promotion candidate waiting for review
+  published_context: "Reviewed SAP knowledge, verified on {release}"

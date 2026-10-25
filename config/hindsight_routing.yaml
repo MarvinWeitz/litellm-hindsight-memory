@@ -1,12 +1,31 @@
 # Which Hindsight banks a request reads and writes, decided only by request tags.
 # Tags arrive as the x-litellm-tags header, a top-level "tags" array, or metadata.tags.
-# Placeholders: {customer} and {project} are the slugs taken from the tags.
+#
+# The plugin has no built-in defaults: every key below is required. Keys that can be
+# switched off take an explicit null. Unknown keys are refused at load time.
 hindsight_routing:
+  hindsight:
+    url_env: HINDSIGHT_API_URL          # environment variable holding the Hindsight API URL
+    api_key_env: HINDSIGHT_API_KEY      # environment variable holding the API key; null = no key
+    client_timeout_seconds: 30          # HTTP timeout of the client (recall has its own below)
+    user_agent: litellm-hindsight-memory
+
   tags:
-    customer: "customer:"        # prefix naming the customer
-    project: "project:"          # prefix naming the project
-    opt_out: "memory:off"        # add this tag to skip memory for one request
+    # Bank tag: picks the memory bank. At most one per request.
+    # The name is the placeholder in templates below: {customer}.
+    bank:
+      name: customer
+      prefix: "customer:"
+    # Scope tag: narrows recall and retain inside the chosen bank, never picks a bank.
+    # Placeholder {project}. Set the whole scope to null for banks without scopes.
+    scope:
+      name: project
+      prefix: "project:"
+      when_missing: "_shared"           # value used when a request has no scope tag; null = none
+    opt_out: "memory:off"               # add this tag to skip memory for one request; null = no opt-out
     passthrough: ["domain:", "kind:"]   # request tags copied onto saved memories
+    slug_pattern: "^[a-z0-9_][a-z0-9_-]{0,62}$"   # every bank and scope value must match
+    lowercase: true                     # match prefixes and values ignoring case, store lowercase
 
   banks:
     write: "customer::{customer}"       # the only bank the proxy ever writes
@@ -18,27 +37,38 @@ hindsight_routing:
         budget: low
         max_tokens: 1500
       - bank: "global::sap"             # shared layer, read-only
+        tags: []                        # [] = no tag filter
+        tags_match: any
+        types: []                       # [] = all memory types
         budget: low
         max_tokens: 1000
-      # More shared layers are just more entries, e.g.:
-      # - bank: "industry::utilities"
+      # More shared layers are just more entries, e.g. bank: "industry::utilities"
 
   retain:
     enabled: true
     tags: ["project:{project}", "source:litellm-proxy"]
     max_chars: 12000
+    template: "Developer: {user}\n\nAssistant: {assistant}"
+    context: >-
+      Developer conversation through the LiteLLM proxy. The assistant was given memory recalled
+      from this bank, so its answer may repeat known facts: extract only what is new here.
+    document_prefix: "turn:"            # document id = prefix + hash of bank, scope and message
+    metadata: {source: litellm-proxy}   # the model name is always added
 
   recall:
     timeout_seconds: 0.8         # fail open: no memory rather than a slow request
     cache_ttl_seconds: 3600      # tool-loop requests of one turn reuse the recall
     cache_size: 2048
 
-  defaults:
-    project_when_missing: "_shared"
+  inject:
+    marker: hindsight_memory     # memory goes in <hindsight_memory>...</hindsight_memory>
+    header: >-
+      Memory recalled from earlier work ({scope}). Use it when it is relevant.
+      If it conflicts with the conversation or the code, trust the conversation and the code.
 
-  untagged_request: passthrough  # or "reject" to require a customer tag
+  untagged_request: passthrough  # or "reject" to require a bank tag
 
-  # Typo guard. null = accept any slug. A customer mapped to null accepts any project.
+  # Typo guard. null = accept any value. A bank value mapped to null accepts any scope.
   allowed:
     acme: ["acme-portal", "acme-s4-extension"]
     globex: null

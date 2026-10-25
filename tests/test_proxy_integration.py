@@ -10,7 +10,6 @@ import pytest
 from litellm.integrations.custom_logger import CustomLogger
 
 import litellm_hindsight
-from litellm_hindsight.config import RoutingConfig
 
 AUTH = {"Authorization": "Bearer sk-test"}
 TAGS = {"x-litellm-tags": "customer:acme,project:acme-portal"}

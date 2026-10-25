@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from .config import ReadTarget, RoutingConfig
-
-_SLUG = re.compile(r"^[a-z0-9_][a-z0-9_-]{0,62}$")
 
 
 class RoutingError(ValueError):
@@ -16,8 +13,9 @@ class RoutingError(ValueError):
 
 @dataclass(frozen=True)
 class Route:
-    customer: str
-    project: str | None
+    bank_value: str  # value of the bank tag, e.g. "acme" from customer:acme
+    scope_value: str | None  # value of the scope tag, e.g. "acme-portal" from project:acme-portal
+    label: str  # "customer acme, project acme-portal", for the memory header and logs
     write_bank: str
     reads: tuple[ReadTarget, ...]
     retain_tags: tuple[str, ...]
@@ -40,34 +38,42 @@ def resolve(tags: list[str], cfg: RoutingConfig) -> Route | None:
     """Return the route for these tags, or None when memory does not apply.
 
     Raises RoutingError for tags that look like memory routing but are unsafe:
-    several customers, a malformed slug, or a slug outside the allowlist.
+    several bank tags or scope tags, a malformed value, or a value outside the allowlist.
     """
     if cfg.opt_out_tag and cfg.opt_out_tag in tags:
         return None
 
-    customers = _values(tags, cfg.customer_prefix)
-    projects = _values(tags, cfg.project_prefix)
-    if not customers:
+    bank_kind, scope_kind = cfg.bank_tag, cfg.scope_tag
+    values = _values(tags, bank_kind.prefix, cfg.lowercase)
+    scopes = _values(tags, scope_kind.prefix, cfg.lowercase) if scope_kind else []
+    if not values:
         if cfg.untagged_request == "reject":
-            raise RoutingError(f"request has no '{cfg.customer_prefix}<slug>' tag")
+            raise RoutingError(f"request has no '{bank_kind.prefix}<{bank_kind.name}>' tag")
         return None
-    if len(customers) > 1:
-        raise RoutingError(f"request names several customers: {', '.join(customers)}")
-    if len(projects) > 1:
-        raise RoutingError(f"request names several projects: {', '.join(projects)}")
+    if len(values) > 1:
+        raise RoutingError(f"request names several {bank_kind.name} values: {', '.join(values)}")
+    if len(scopes) > 1:
+        raise RoutingError(f"request names several {scope_kind.name} values: {', '.join(scopes)}")
 
-    customer = customers[0]
-    project = projects[0] if projects else cfg.project_when_missing
-    for slug in (customer, project):
-        if slug is not None and not _SLUG.match(slug):
-            raise RoutingError(f"invalid slug {slug!r}: use lowercase letters, digits, '-' or '_'")
-    _check_allowed(customer, project, cfg)
+    value = values[0]
+    scope = scopes[0] if scopes else cfg.scope_when_missing
+    for slug in (value, scope):
+        if slug is not None and not cfg.slug_pattern.fullmatch(slug):
+            raise RoutingError(f"invalid tag value {slug!r}: it must match {cfg.slug_pattern.pattern}")
+    _check_allowed(value, scope, cfg)
 
-    fields = {"customer": customer, "project": project or ""}
+    fields = {bank_kind.name: value}
+    if scope_kind:
+        fields[scope_kind.name] = scope or ""
+
+    def keep(template: str) -> bool:
+        # Without a scope value, drop tag templates that would need one.
+        return scope is not None or scope_kind is None or f"{{{scope_kind.name}}}" not in template
+
     reads = tuple(
         ReadTarget(
             bank=r.bank.format(**fields),
-            tags=tuple(t.format(**fields) for t in r.tags if project or "{project}" not in t),
+            tags=tuple(t.format(**fields) for t in r.tags if keep(t)),
             tags_match=r.tags_match,
             types=r.types,
             budget=r.budget,
@@ -75,34 +81,38 @@ def resolve(tags: list[str], cfg: RoutingConfig) -> Route | None:
         )
         for r in cfg.reads
     )
-    retain_tags = [t.format(**fields) for t in cfg.retain_tags if project or "{project}" not in t]
+    retain_tags = [t.format(**fields) for t in cfg.retain_tags if keep(t)]
     retain_tags += [t for t in tags if t.startswith(cfg.passthrough_prefixes) and t not in retain_tags]
+    label = f"{bank_kind.name} {value}" + (f", {scope_kind.name} {scope}" if scope_kind and scope else "")
     return Route(
-        customer=customer,
-        project=project,
+        bank_value=value,
+        scope_value=scope,
+        label=label,
         write_bank=cfg.write_bank.format(**fields),
         reads=reads,
         retain_tags=tuple(retain_tags),
     )
 
 
-def _values(tags: list[str], prefix: str) -> list[str]:
+def _values(tags: list[str], prefix: str, lowercase: bool) -> list[str]:
     out: list[str] = []
     for tag in tags:
-        if tag.lower().startswith(prefix.lower()):
-            value = tag[len(prefix):].strip().lower()
+        matches = tag.lower().startswith(prefix.lower()) if lowercase else tag.startswith(prefix)
+        if matches:
+            value = tag[len(prefix):].strip()
+            value = value.lower() if lowercase else value
             if value and value not in out:
                 out.append(value)
     return out
 
 
-def _check_allowed(customer: str, project: str | None, cfg: RoutingConfig) -> None:
+def _check_allowed(value: str, scope: str | None, cfg: RoutingConfig) -> None:
     if cfg.allowed is None:
         return
-    if customer not in cfg.allowed:
-        raise RoutingError(f"unknown customer {customer!r}")
-    projects = cfg.allowed[customer]
-    if projects is None or project is None or project == cfg.project_when_missing:
+    if value not in cfg.allowed:
+        raise RoutingError(f"unknown {cfg.bank_tag.name} {value!r}")
+    scopes = cfg.allowed[value]
+    if scopes is None or scope is None or scope == cfg.scope_when_missing:
         return
-    if project not in projects:
-        raise RoutingError(f"unknown project {project!r} for customer {customer!r}")
+    if scope not in scopes:
+        raise RoutingError(f"unknown {cfg.scope_tag.name} {scope!r} for {cfg.bank_tag.name} {value!r}")

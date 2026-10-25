@@ -1,12 +1,33 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import yaml
 
 from litellm_hindsight.config import RoutingConfig
+
+ROUTING_FILE = Path(__file__).parents[1] / "config" / "hindsight_routing.yaml"
+TEST_ENV = {"HINDSIGHT_API_URL": "http://hindsight.test"}
+
+
+def routing_dict(**overrides: Any) -> dict[str, Any]:
+    """The repo's routing file as a dict, with top-level sections merged from overrides."""
+    raw = copy.deepcopy(yaml.safe_load(ROUTING_FILE.read_text())["hindsight_routing"])
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(raw.get(key), dict) and key != "allowed":
+            raw[key] = {**raw[key], **value}
+        else:
+            raw[key] = value
+    return raw
+
+
+def make_config(**overrides: Any) -> RoutingConfig:
+    return RoutingConfig.from_dict(routing_dict(**overrides), env=TEST_ENV)
 
 
 @dataclass
@@ -55,4 +76,4 @@ def fake_hindsight() -> FakeHindsight:
 
 @pytest.fixture
 def config() -> RoutingConfig:
-    return RoutingConfig.from_dict({"allowed": {"acme": ["acme-portal", "acme-s4-extension"], "globex": None}})
+    return make_config(allowed={"acme": ["acme-portal", "acme-s4-extension"], "globex": None})

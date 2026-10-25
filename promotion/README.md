@@ -36,6 +36,7 @@ Inside the devcontainer, with the stack up, it's installed already (`pip install
 
 ```bash
 set -a; source .env; set +a
+export PROMOTION_CONFIG=promotion/promotion.yaml   # or pass --config to each command
 
 # 1. See what would be proposed, without writing anything.
 #    Progress goes to stderr; each reflect takes seconds to a few minutes on CPU.
@@ -59,7 +60,7 @@ To nominate a finding for the next harvest, find its document id in the Hindsigh
 python -m hindsight_promotion nominate customer::acme turn:3f9a...
 ```
 
-Settings live in [`promotion.yaml`](promotion.yaml): bank names, the domain list, the harvest query, the anonymizer endpoint and the blocklist. `PROMOTION_CONFIG` points at another file, and `PROMOTION_REVIEW_DIR` moves the review files.
+Settings live in [`promotion.yaml`](promotion.yaml): the Hindsight connection, bank names, the scope, domain, kind and lifecycle tags, the domain list, the harvest query, the LLM endpoint, the subject named in the prompts, the blocklist, triage limits, the review directory and the texts stored with candidates. There are no built-in defaults: every key is required, unknown keys are refused, and the file must be named with `--config` or `PROMOTION_CONFIG`. Keep `tags.scope_prefix` and `tags.shared_scope` in step with the scope tag in `config/hindsight_routing.yaml`, because scope values are blocked from the global bank.
 
 Review files contain the original customer text and source ids, so `promotion/review/` is git-ignored. Don't share them outside the team.
 

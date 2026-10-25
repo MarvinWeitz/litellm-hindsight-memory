@@ -27,8 +27,6 @@ from .config import PromotionConfig
 from .llm import LLM
 from .store import HindsightStore
 
-NOMINATED, DONE, REJECTED = "promote:candidate", "promote:done", "promote:rejected"
-STAGED, FILTERED, PUBLISHED = "promote:staged", "promote:filtered", "promote:published"
 DECISIONS = ("pending", "filtered", "approve", "reject")
 
 REFLECT_SCHEMA = {
@@ -88,7 +86,7 @@ def harvest(store: HindsightStore, anonymizer: Anonymizer, cfg: PromotionConfig,
             continue
         raw, projects = _collect(store, cfg, bank, progress)
         if use_triage:
-            raw = triage.merge(llm, raw, lambda msg, bank=bank: progress(f"{bank}  {msg}"))
+            raw = triage.merge(llm, raw, cfg.subject, lambda msg, bank=bank: progress(f"{bank}  {msg}"))
         forbidden = customers + projects + list(cfg.blocklist)
         kept = []
         for i, cand in enumerate(raw, 1):
@@ -125,30 +123,32 @@ def _collect(store: HindsightStore, cfg: PromotionConfig, bank: str,
     Also returns the project slugs seen on the source facts: project names are
     customer-specific too (acme-portal), so they must not reach the global bank.
     """
-    passes: list[tuple[str | None, list[str] | None]] = [(d, [f"domain:{d}"]) for d in cfg.domains]
+    life, scope = cfg.lifecycle, cfg.scope_prefix
+    shared = f"{scope}{cfg.shared_scope}" if cfg.shared_scope is not None else None
+    passes: list[tuple[str | None, list[str] | None]] = [(d, [f"{cfg.domain_prefix}{d}"]) for d in cfg.domains]
     if cfg.include_untagged:
         passes.append((None, None))
     seen: dict[str, Candidate] = {}
     projects: set[str] = set()
 
     def add(text: str, facts: list[dict], domain: str | None, nominated: bool = False) -> None:
-        facts = [f for f in facts if not {DONE, REJECTED} & set(f["tags"])]
-        projects.update(t[len("project:"):] for f in facts for t in f["tags"]
-                        if t.startswith("project:") and t != "project:_shared")
+        facts = [f for f in facts if not {life.done, life.rejected} & set(f["tags"])]
+        projects.update(t[len(scope):] for f in facts for t in f["tags"]
+                        if t.startswith(scope) and t != shared)
         key = _key(bank, text)
         if key in seen:
             seen[key].nominated |= nominated
         if not text.strip() or not facts or key in seen:
             return
         seen[key] = Candidate(
-            id=key, source_bank=bank, domain=domain or _domain_of(facts), original=" ".join(text.split()),
+            id=key, source_bank=bank, domain=domain or _domain_of(facts, cfg.domain_prefix), original=" ".join(text.split()),
             source_facts=sorted({f["id"] for f in facts}),
             source_documents=sorted({f["document_id"] for f in facts if f["document_id"]}),
             nominated=nominated,
         )
 
     for domain, tags in passes:
-        label = f"domain:{domain}" if domain else "whole bank"
+        label = f"{cfg.domain_prefix}{domain}" if domain else "whole bank"
         # Reflect is an LLM loop and takes seconds to minutes; skip domains with no facts.
         if tags and not store.has_memories(bank, tags):
             progress(f"{bank}  {label}: no facts, skipped")
@@ -162,21 +162,22 @@ def _collect(store: HindsightStore, cfg: PromotionConfig, bank: str,
             cited = [by_id[i] for i in item.get("source_fact_ids") or () if i in by_id]
             add(str(item.get("text", "")), cited or facts, domain)
         progress(f"{bank}  {label}: {len(seen) - before} new candidates ({time.monotonic() - started:.0f} s)")
-    for fact in store.memories(bank, [NOMINATED]):
+    for fact in store.memories(bank, [life.nominated]):
         add(fact["text"], [fact], None, nominated=True)
     return list(seen.values()), sorted(projects)
 
 
 def stage(store: HindsightStore, cfg: PromotionConfig, result: HarvestResult) -> None:
-    store.ensure_bank(cfg.staging_bank, "Keep each promotion candidate as one fact, worded as given.")
+    store.ensure_bank(cfg.staging_bank, cfg.staging_mission)
+    life = cfg.lifecycle
     # Filtered candidates are staged too, so a reviewer who rescues one can close its loop.
-    for c, status in [(c, STAGED) for c in result.candidates] + [(c, FILTERED) for c, _ in result.filtered]:
+    for c, status in [(c, life.staged) for c in result.candidates] + [(c, life.filtered) for c, _ in result.filtered]:
         store.retain(
             cfg.staging_bank, c.text, document_id=f"candidate:{c.id}",
-            tags=[status, f"kind:{c.kind}"] + ([f"domain:{c.domain}"] if c.domain else []),
+            tags=[status, f"{cfg.kind_prefix}{c.kind}"] + ([f"{cfg.domain_prefix}{c.domain}"] if c.domain else []),
             metadata={"source_bank": c.source_bank, "source_documents": ",".join(c.source_documents),
                       "topic_id": c.topic_id, "harvest_id": result.harvest_id},
-            context="Promotion candidate waiting for review",
+            context=cfg.staging_context,
         )
 
 
@@ -231,14 +232,14 @@ def publish(store: HindsightStore, cfg: PromotionConfig, review_file: Path, *, d
             report.skipped.append(item["id"])
         elif decision == "reject":
             if not dry_run:
-                _close(store, cfg, item, REJECTED)
+                _close(store, cfg, item, cfg.lifecycle.rejected)
             report.rejected.append(item["id"])
         elif problem := _check(item, cfg, forbidden):
             report.errors.append(f"{item.get('id')}: {problem}")
         else:
             if not dry_run:
                 _publish_one(store, cfg, item)
-                _close(store, cfg, item, DONE)
+                _close(store, cfg, item, cfg.lifecycle.done)
             report.published.append(item["topic_id"])
     return report
 
@@ -259,37 +260,39 @@ def _check(item: dict, cfg: PromotionConfig, forbidden: list[str]) -> str | None
 
 def _publish_one(store: HindsightStore, cfg: PromotionConfig, item: dict) -> None:
     release = str(item["sap_release"]).strip()
-    tags = ["source:promotion", f"kind:{item['kind']}"] + ([f"domain:{item['domain']}"] if item.get("domain") else [])
+    tags = [*cfg.published_tags, f"{cfg.kind_prefix}{item['kind']}"]
+    tags += [f"{cfg.domain_prefix}{item['domain']}"] if item.get("domain") else []
     # The topic id is the document id, so publishing the same topic again updates it.
     store.retain(
         cfg.global_bank, " ".join(str(item["text"]).split()), document_id=item["topic_id"], tags=tags,
         metadata={"sap_release": release, "candidate_id": item["id"],
                   "promoted_at": datetime.now(timezone.utc).date().isoformat()},
-        context=f"Reviewed SAP knowledge, verified on {release}",
+        context=cfg.published_context.format(release=release),
     )
 
 
 def _close(store: HindsightStore, cfg: PromotionConfig, item: dict, outcome: str) -> None:
-    source = item.get("source") or {}
+    life, source = cfg.lifecycle, item.get("source") or {}
     for doc in source.get("documents") or ():
-        store.retag_document(source["bank"], doc, add=[outcome], remove=[NOMINATED])
-    staged = PUBLISHED if outcome == DONE else REJECTED
-    store.retag_document(cfg.staging_bank, f"candidate:{item['id']}", add=[staged], remove=[STAGED, FILTERED])
+        store.retag_document(source["bank"], doc, add=[outcome], remove=[life.nominated])
+    staged = life.published if outcome == life.done else life.rejected
+    store.retag_document(cfg.staging_bank, f"candidate:{item['id']}", add=[staged],
+                         remove=[life.staged, life.filtered])
 
 
-def nominate(store: HindsightStore, bank: str, document_id: str) -> None:
-    store.retag_document(bank, document_id, add=[NOMINATED])
+def nominate(store: HindsightStore, cfg: PromotionConfig, bank: str, document_id: str) -> None:
+    store.retag_document(bank, document_id, add=[cfg.lifecycle.nominated])
 
 
 def _key(bank: str, text: str) -> str:
     return hashlib.sha256(f"{bank}\x00{' '.join(text.lower().split())}".encode()).hexdigest()[:12]
 
 
-def _domain_of(facts: list[dict]) -> str | None:
+def _domain_of(facts: list[dict], prefix: str) -> str | None:
     for f in facts:
         for t in f["tags"]:
-            if t.startswith("domain:"):
-                return t[len("domain:"):]
+            if t.startswith(prefix):
+                return t[len(prefix):]
     return None
 
 

@@ -13,11 +13,11 @@ from dataclasses import dataclass
 
 from .llm import LLM, parse_json
 
-PROMPT = """You prepare SAP CAP/BTP knowledge for a knowledge base shared across all customers.
+PROMPT = """You prepare {subject} knowledge for a knowledge base shared across all customers.
 
 Rewrite the candidate below so it is generic: remove customer and company names, system IDs,
 Cloud Connector location IDs, hostnames, subaccount and space names, people, and business data.
-Keep the technical substance: SAP products, versions, APIs, error messages, configuration keys.
+Keep the technical substance: products, versions, APIs, error messages, configuration keys.
 If the candidate is only true for one customer's landscape, or cannot be made generic without
 losing its point, set "generic" to false.
 
@@ -41,11 +41,12 @@ class Rewrite:
 
 
 class Anonymizer:
-    def __init__(self, llm: LLM, kinds: tuple[str, ...]):
-        self.llm, self.kinds = llm, kinds
+    def __init__(self, llm: LLM, kinds: tuple[str, ...], subject: str):
+        self.llm, self.kinds, self.subject = llm, kinds, subject
 
     def rewrite(self, text: str) -> Rewrite:
-        return parse(self.llm.text(PROMPT.format(text=text, kinds=list(self.kinds)), json_mode=True), self.kinds)
+        prompt = PROMPT.format(text=text, kinds=list(self.kinds), subject=self.subject)
+        return parse(self.llm.text(prompt, json_mode=True), self.kinds)
 
 
 def parse(raw: str, kinds: tuple[str, ...]) -> Rewrite:

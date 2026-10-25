@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from .config import PromotionConfig
 from .llm import LLM
 
-MERGE_PROMPT = """Below are numbered notes harvested from one team's SAP CAP/BTP memory.
+MERGE_PROMPT = """Below are numbered notes harvested from one team's {subject} memory.
 Group the notes that state the same fact, fix or advice, even if worded differently.
 Notes on related but different points stay in separate groups.
 
@@ -27,10 +27,10 @@ Answer with JSON only: {{"groups": [[<note numbers>], ...]}}
 
 {notes}"""
 
-BASELINE_PROMPT = """You are an SAP CAP/BTP developer. Without looking anything up, say in 3-5 sentences
+BASELINE_PROMPT = """You are a developer working with {subject}. Without looking anything up, say in 3-5 sentences
 what you know about this topic: {topic} ({kind}, area: {domain})."""
 
-JUDGE_PROMPT = """You decide whether a note belongs in a knowledge base shared by all SAP CAP/BTP teams.
+JUDGE_PROMPT = """You decide whether a note belongs in a knowledge base shared by all {subject} teams.
 
 Note:
 {text}
@@ -59,12 +59,12 @@ class Verdict:
     reason: str = ""
 
 
-def merge(llm: LLM, candidates: list, progress: Callable[[str], None] = lambda _: None) -> list:
+def merge(llm: LLM, candidates: list, subject: str, progress: Callable[[str], None] = lambda _: None) -> list:
     """Group duplicates; each group keeps its first member, with every member's sources."""
     if len(candidates) < 2:
         return list(candidates)
     notes = "\n".join(f"{i}. {c.original}" for i, c in enumerate(candidates, 1))
-    data = llm.json(MERGE_PROMPT.format(notes=notes)) or {}
+    data = llm.json(MERGE_PROMPT.format(notes=notes, subject=subject)) or {}
     used: set[int] = set()
     merged = []
     for group in data.get("groups") or ():
@@ -82,11 +82,11 @@ def merge(llm: LLM, candidates: list, progress: Callable[[str], None] = lambda _
 def judge(llm: LLM, store, cfg: PromotionConfig, cand, *, global_ready: bool) -> Verdict:
     baseline = ""
     if cfg.novelty_check:
-        baseline = llm.text(BASELINE_PROMPT.format(topic=cand.topic_id or cand.text[:80], kind=cand.kind,
+        baseline = llm.text(BASELINE_PROMPT.format(subject=cfg.subject, topic=cand.topic_id or cand.text[:80], kind=cand.kind,
                                                    domain=cand.domain or "general"))
     existing = store.recall(cfg.global_bank, cand.text) if global_ready else []
     data = llm.json(JUDGE_PROMPT.format(
-        text=cand.text, baseline=baseline.strip() or "(not checked)",
+        subject=cfg.subject, text=cand.text, baseline=baseline.strip() or "(not checked)",
         existing="\n".join(f"- [{e['document_id']}] {e['text']}" for e in existing) or "(none)",
     ))
     if data is None:

@@ -61,16 +61,26 @@ Extra tags with a `domain:` or `kind:` prefix are copied onto saved memories. Ad
 
 ## Configuration
 
-Routing lives in [`config/hindsight_routing.yaml`](config/hindsight_routing.yaml) and can change without code changes:
+Routing lives in [`config/hindsight_routing.yaml`](config/hindsight_routing.yaml) and can change without code changes. The plugin has no built-in defaults: every key in that file is required, keys that can be switched off take an explicit `null`, and unknown keys are refused when the proxy loads the file. Set `HINDSIGHT_ROUTING_CONFIG` to its path.
 
-- tag prefixes for customer and project,
-- the write bank template (`customer::{customer}`),
-- any number of read banks, each with its own tag filter, memory types, budget and token cap (add an industry bank, a team bank, and so on). The customer bank reads only `world` and `experience` facts by default: Hindsight's observations are consolidated across the whole bank and can carry one project's facts under another project's tag,
-- an allowlist of customers and projects, so a typo can't create an invisible bank,
-- `untagged_request: reject` to require a customer tag on every request,
-- recall timeout (default 0.8 s, fail open) and the per-turn cache.
+Two kinds of request tags drive routing:
 
-Point `HINDSIGHT_ROUTING_CONFIG` at the file. `HINDSIGHT_API_URL` and `HINDSIGHT_API_KEY` set the Hindsight connection. `HINDSIGHT_LOG_LEVEL=INFO` logs one line per recall (banks, facts, milliseconds) and per retain. The local stack sets it.
+- the **bank tag** (`tags.bank`) picks the memory bank, e.g. `customer:acme` selects `customer::acme`,
+- the **scope tag** (`tags.scope`) only narrows recall and retain inside that bank, e.g. `project:acme-portal`. It never selects a bank. Set `tags.scope: null` for banks without scopes.
+
+Each kind has a `name` and a `prefix`. The name is its placeholder in the bank and tag templates (`{customer}`, `{project}` in the shipped file), so renaming `customer` to `kunde` means writing `{kunde}` in the templates. A template with a placeholder the scheme doesn't define is refused at load time.
+
+The file also sets:
+
+- the Hindsight connection (`hindsight.url_env` and `api_key_env` name the environment variables, plus the client timeout and user agent),
+- the opt-out tag, the tags copied onto saved memories, the allowed value pattern, and whether matching ignores case,
+- the write bank template and any number of read banks, each with its own tag filter, memory types, budget and token cap. The customer bank reads only `world` and `experience` facts: Hindsight's observations are consolidated across the whole bank and can carry one project's facts under another project's tag,
+- what gets saved: tags, size cap, the text template, the extraction context, the document id prefix and metadata,
+- recall timeout (0.8 s in the shipped file, fail open) and the per-turn cache,
+- the memory block's marker and header text,
+- `untagged_request` (`passthrough` or `reject`) and an allowlist of bank and scope values, so a typo can't create an invisible bank.
+
+`HINDSIGHT_LOG_LEVEL=INFO` logs one line per recall (banks, facts, milliseconds) and per retain. The local stack sets it.
 
 ## How it keeps latency down
 
