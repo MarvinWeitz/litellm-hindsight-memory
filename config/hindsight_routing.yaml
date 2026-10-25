@@ -1,0 +1,43 @@
+# Which Hindsight banks a request reads and writes, decided only by request tags.
+# Tags arrive as the x-litellm-tags header, a top-level "tags" array, or metadata.tags.
+# Placeholders: {customer} and {project} are the slugs taken from the tags.
+hindsight_routing:
+  tags:
+    customer: "customer:"        # prefix naming the customer
+    project: "project:"          # prefix naming the project
+    opt_out: "memory:off"        # add this tag to skip memory for one request
+    passthrough: ["domain:", "kind:"]   # request tags copied onto saved memories
+
+  banks:
+    write: "customer::{customer}"       # the only bank the proxy ever writes
+    read:                               # all recalled in parallel
+      - bank: "customer::{customer}"
+        tags: ["project:{project}", "project:_shared"]
+        tags_match: any_strict          # untagged memories never leak in
+        budget: low
+        max_tokens: 1500
+      - bank: "global::sap"             # shared layer, read-only
+        budget: low
+        max_tokens: 1000
+      # More shared layers are just more entries, e.g.:
+      # - bank: "industry::utilities"
+
+  retain:
+    enabled: true
+    tags: ["project:{project}", "source:litellm-proxy"]
+    max_chars: 12000
+
+  recall:
+    timeout_seconds: 0.8         # fail open: no memory rather than a slow request
+    cache_ttl_seconds: 3600      # tool-loop requests of one turn reuse the recall
+    cache_size: 2048
+
+  defaults:
+    project_when_missing: "_shared"
+
+  untagged_request: passthrough  # or "reject" to require a customer tag
+
+  # Typo guard. null = accept any slug. A customer mapped to null accepts any project.
+  allowed:
+    acme: ["acme-portal", "acme-s4-extension"]
+    globex: null
