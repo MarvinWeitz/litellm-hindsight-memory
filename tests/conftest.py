@@ -17,6 +17,7 @@ class FakeHindsight:
     recalls: list[dict[str, Any]] = field(default_factory=list)
     retains: list[dict[str, Any]] = field(default_factory=list)
     delay: dict[str, float] = field(default_factory=dict)
+    ignore_tag_filter: bool = False  # simulates a server returning out-of-scope memories
 
     async def arecall(self, bank_id: str, query: str, **kwargs: Any):
         import asyncio
@@ -27,7 +28,7 @@ class FakeHindsight:
         wanted = set(kwargs.get("tags") or ())
         results = []
         for text, tags in self.facts.get(bank_id, []):
-            if wanted and not wanted.intersection(tags):
+            if wanted and not wanted.intersection(tags) and not self.ignore_tag_filter:
                 continue  # mimics any_strict: untagged facts never match
             results.append(SimpleNamespace(text=text, tags=tags))
         return SimpleNamespace(results=results)

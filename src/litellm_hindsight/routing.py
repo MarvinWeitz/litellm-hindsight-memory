@@ -69,6 +69,7 @@ def resolve(tags: list[str], cfg: RoutingConfig) -> Route | None:
             bank=r.bank.format(**fields),
             tags=tuple(t.format(**fields) for t in r.tags if project or "{project}" not in t),
             tags_match=r.tags_match,
+            types=r.types,
             budget=r.budget,
             max_tokens=r.max_tokens,
         )

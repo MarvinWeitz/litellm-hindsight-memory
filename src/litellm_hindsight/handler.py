@@ -29,6 +29,10 @@ from .routing import Route, RoutingError, collect_tags, resolve
 log = logging.getLogger("litellm_hindsight")
 
 METADATA_KEY = "hindsight_memory"
+RETAIN_CONTEXT = (
+    "Developer conversation through the LiteLLM proxy. The assistant was given memory recalled "
+    "from this bank, so its answer may repeat known facts: extract only what is new here."
+)
 _CHAT_CALL_TYPES = {"completion", "acompletion", "anthropic_messages", "responses", "aresponses"}
 
 
@@ -120,11 +124,17 @@ class HindsightMemoryHandler(CustomLogger):
         kwargs: dict[str, Any] = {"budget": target.budget, "max_tokens": target.max_tokens}
         if target.tags:
             kwargs.update(tags=list(target.tags), tags_match=target.tags_match)
+        if target.types:
+            kwargs["types"] = list(target.types)
         response = await asyncio.wait_for(
             self.client.arecall(bank_id=target.bank, query=query, **kwargs),
             timeout=self.config.recall_timeout,
         )
-        return [r.text for r in (response.results or []) if getattr(r, "text", None)]
+        return [
+            r.text
+            for r in (response.results or [])
+            if getattr(r, "text", None) and _tags_allowed(getattr(r, "tags", None), target)
+        ]
 
     # ---- after the call ----------------------------------------------------
 
@@ -145,7 +155,7 @@ class HindsightMemoryHandler(CustomLogger):
             await self.client.aretain(
                 bank_id=info["write_bank"],
                 content=content,
-                context="Developer conversation through the LiteLLM proxy",
+                context=RETAIN_CONTEXT,
                 document_id=f"turn:{info['turn_key']}",
                 tags=info["retain_tags"],
                 metadata={"source": "litellm-proxy", "model": str(kwargs.get("model", ""))},
@@ -172,6 +182,28 @@ class HindsightMemoryHandler(CustomLogger):
         self._cache.move_to_end(key)
         while len(self._cache) > self.config.cache_size:
             self._cache.popitem(last=False)
+
+
+def _tags_allowed(result_tags: list[str] | None, target: ReadTarget) -> bool:
+    """Re-check each recalled memory against the target's tag filter.
+
+    Hindsight can return memories outside the filter (seen with facts from
+    another project of the same customer), so the plugin enforces the
+    project boundary itself instead of trusting the server-side filter.
+    """
+    if not target.tags:
+        return True
+    tags, wanted = set(result_tags or ()), set(target.tags)
+    match = target.tags_match
+    if not tags:
+        return match in ("any", "all")
+    if match in ("any", "any_strict"):
+        return bool(tags & wanted)
+    if match in ("all", "all_strict"):
+        return wanted <= tags
+    if match == "exact":
+        return tags == wanted
+    return True
 
 
 def _turn_key(route: Route, text: str) -> str:

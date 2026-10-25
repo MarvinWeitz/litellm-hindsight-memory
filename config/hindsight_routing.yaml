@@ -14,6 +14,7 @@ hindsight_routing:
       - bank: "customer::{customer}"
         tags: ["project:{project}", "project:_shared"]
         tags_match: any_strict          # untagged memories never leak in
+        types: [world, experience]      # skip observations: they merge facts across projects
         budget: low
         max_tokens: 1500
       - bank: "global::sap"             # shared layer, read-only

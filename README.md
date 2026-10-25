@@ -19,7 +19,7 @@ The devcontainer is one Linux container (Debian trixie, Python 3.12) with its ow
    - **Upstream mode (default, no provider keys).** The local proxy forwards every request to an existing LiteLLM proxy, such as your company's, and adds memory on the way. Set `UPSTREAM_LITELLM_URL` and put your SSO token in `UPSTREAM_LITELLM_KEY`. Run `scripts/stack.sh models` to list the models it offers, and set `HINDSIGHT_LLM_MODEL` to a small, cheap one. Hindsight uses it to extract facts. When the token expires, run `scripts/stack.sh token <new-token>`. This updates `.env` and restarts only the proxy.
    - **Direct mode.** Set `LITELLM_CONFIG=litellm.yaml` and `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY`, and change `hindsight-extraction` in `config/litellm.yaml`).
 3. Start the stack: `scripts/stack.sh up`. The first start pulls the Hindsight image (about 9 GB) and loads its models, which takes a few minutes. The script waits until both services answer.
-4. Create the demo banks and memories: `python scripts/seed_banks.py`. Wait a minute while Hindsight extracts facts. You can watch them arrive in the Hindsight UI on port 9999.
+4. Create the demo banks and memories: `python scripts/seed_banks.py`. Wait a minute while Hindsight extracts facts. You can watch them arrive in the Hindsight UI on port 9999. `--reset` deletes the demo banks first, for a clean start.
 5. Send a tagged request from the container's terminal:
 
    ```bash
@@ -65,7 +65,7 @@ Routing lives in [`config/hindsight_routing.yaml`](config/hindsight_routing.yaml
 
 - tag prefixes for customer and project,
 - the write bank template (`customer::{customer}`),
-- any number of read banks, each with its own tag filter, budget and token cap (add an industry bank, a team bank, and so on),
+- any number of read banks, each with its own tag filter, memory types, budget and token cap (add an industry bank, a team bank, and so on). The customer bank reads only `world` and `experience` facts by default: Hindsight's observations are consolidated across the whole bank and can carry one project's facts under another project's tag,
 - an allowlist of customers and projects, so a typo can't create an invisible bank,
 - `untagged_request: reject` to require a customer tag on every request,
 - recall timeout (default 0.8 s, fail open) and the per-turn cache.
