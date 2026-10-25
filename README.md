@@ -12,7 +12,7 @@ The global bank is only ever read. Requests without a customer tag pass through 
 
 ## Quick start (Linux devcontainer)
 
-The devcontainer is one Linux container (Debian, Python 3.12) with its own Docker engine (Docker-in-Docker). LiteLLM, Hindsight and Postgres all run inside it, so the host needs only a devcontainer runtime: VS Code with Dev Containers, GitHub Codespaces, or the `devcontainer` CLI. Give it at least 4 CPUs, 8 GB RAM and 32 GB disk.
+The devcontainer is one Linux container (Debian trixie, Python 3.12) with its own Docker engine (Docker-in-Docker). LiteLLM, Hindsight and Postgres all run inside it, so the host needs only a devcontainer runtime: VS Code with Dev Containers, GitHub Codespaces, or the `devcontainer` CLI. Give it at least 4 CPUs, 8 GB RAM and 32 GB disk.
 
 1. Open the repository in the devcontainer. In VS Code, choose **Reopen in Container**. With the CLI, run `devcontainer up --workspace-folder .` and then `devcontainer exec --workspace-folder . bash`.
 2. In the container's terminal, edit `.env` (created from `.env.example` on first start). Choose how the local proxy reaches models:
