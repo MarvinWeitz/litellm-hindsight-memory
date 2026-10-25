@@ -25,7 +25,7 @@
     "LITELLM_URL": "http://localhost:4000",
     "HINDSIGHT_API_URL": "http://localhost:8888"
   },
-  "postCreateCommand": "pip install -e '.[dev]' && (test -f .env || cp .env.example .env)",
+  "postCreateCommand": "pip install -e '.[dev]' -e './promotion[dev]' && (test -f .env || cp .env.example .env)",
   "customizations": {
     "vscode": {"extensions": ["ms-python.python", "charliermarsh.ruff"]}
   }
