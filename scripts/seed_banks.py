@@ -1,6 +1,6 @@
 """Create the demo banks with the configuration from the architecture doc, then add sample memories.
 
-Usage: python scripts/seed_banks.py [--reset] [--no-memories]
+Usage: python scripts/seed_banks.py [--reset] [--no-rerank] [--no-memories]
 Needs HINDSIGHT_API_URL (default http://localhost:8888). Adding memories needs
 the proxy running with a working provider key, because Hindsight extracts
 facts through the hindsight-extraction model.
@@ -94,6 +94,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--no-memories", action="store_true", help="only create and configure banks")
     parser.add_argument("--reset", action="store_true", help="delete the demo banks and all their memories first")
+    parser.add_argument("--no-rerank", action="store_true",
+                        help="switch reranking off: much faster recall on CPU, somewhat rougher ordering")
     args = parser.parse_args()
 
     client = Hindsight(base_url=os.environ.get("HINDSIGHT_API_URL", "http://localhost:8888"))
@@ -111,6 +113,7 @@ def main() -> None:
         )
         client.update_bank_config(
             bank_id, entity_labels=ENTITY_LABELS, retain_custom_instructions=ENGLISH_ONLY,
+            enable_reranking=not args.no_rerank,
             **({"default_observation_scopes": scopes} if scopes else {}),
         )
         print(f"configured {bank_id}")
