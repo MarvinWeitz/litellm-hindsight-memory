@@ -36,13 +36,70 @@ hindsight_routing:
         types: [world, experience]      # skip observations: they merge facts across projects
         budget: low
         max_tokens: 1500
-      - bank: "global::sap"             # shared layer, read-only
+      # Shared layers go under global_banks below.
+
+  # Shared banks on top of the bank picked by the bank tag. The proxy only reads them;
+  # the promotion job (promotion/) is what writes reviewed knowledge into them.
+  # Create or update them with: python -m litellm_hindsight.provision
+  # [] = no global banks.
+  global_banks:
+    - id: "global::sap"
+      name: "SAP CAP/BTP knowledge"     # display name in Hindsight; null = the id
+      # Which routed requests read this bank: "all", or a mapping whose keys follow the
+      # tag names above: customer, exclude_customer, project, exclude_project, plus
+      # request_tags (the request must carry one of them). Listed conditions must all hold.
+      applies_to: all
+      recall:
         tags: []                        # [] = no tag filter
         tags_match: any
         types: []                       # [] = all memory types
         budget: low
         max_tokens: 1000
-      # More shared layers are just more entries, e.g. bank: "industry::utilities"
+      profile:                          # sent to Hindsight by the provision command
+        retain_mission: >-
+          Extract reusable SAP CAP/BTP knowledge: patterns, configuration recipes, version-specific
+          pitfalls, error messages with root causes. Ignore anything customer-specific.
+        observations_mission: >-
+          Consolidate patterns confirmed across several sources. Flag guidance that contradicts
+          newer SAP releases. Write in English.
+        reflect_mission: >-
+          You are an SAP CAP/BTP architect. Give generic, version-aware guidance
+          and say when it depends on the landscape.
+        disposition: {skepticism: 4, literalism: 4, empathy: 1}
+        config:                         # any Hindsight bank config key, passed through as is
+          retain_custom_instructions: "Write every fact and observation in English, whatever language the source text uses."
+          entity_labels:
+            - key: domain
+              type: multi-values
+              tag: true
+              values:
+                - {value: cap, description: "SAP Cloud Application Programming Model: CDS, services, handlers"}
+                - {value: xsuaa, description: "Authentication, roles, XSUAA / IAS"}
+                - {value: destinations, description: "BTP destinations and Connectivity / Cloud Connector"}
+                - {value: hana-cloud, description: "HANA Cloud, HDI containers, persistence"}
+                - {value: event-mesh, description: "Eventing, Event Mesh, messaging"}
+                - {value: s4-integration, description: "S/4HANA APIs, OData, side-by-side extensions"}
+            - key: kind
+              type: value
+              tag: true
+              values:
+                - {value: decision, description: "A choice made and why"}
+                - {value: pitfall, description: "An error, gotcha or failed approach and its fix"}
+                - {value: pattern, description: "A reusable implementation approach"}
+                - {value: runbook, description: "Step-by-step operational procedure"}
+
+    # A layer for some customers only:
+    # - id: "industry::utilities"
+    #   name: null
+    #   applies_to: {customer: [globex]}
+    #   recall: {tags: [], tags_match: any, types: [], budget: low, max_tokens: 800}
+    #   profile:
+    #     retain_mission: "Extract reusable knowledge about SAP IS-U and utilities processes."
+    #
+    # A layer a request opts into with a tag:
+    # - id: "global::abap"
+    #   applies_to: {request_tags: ["stack:abap"]}
+    #   ...
 
   retain:
     enabled: true

@@ -85,11 +85,13 @@ class HindsightMemoryHandler(CustomLogger):
             return data
 
         key = _turn_key(route, turn.text)
-        memory = self._cache_get(key)
+        # Global banks can depend on request tags, so the same turn may read other banks.
+        cache_key = "\x00".join((key, *(r.bank for r in route.reads)))
+        memory = self._cache_get(cache_key)
         recalled = False
         if memory is None:
             memory = await self._recall(route, turn.text)
-            self._cache_put(key, memory)
+            self._cache_put(cache_key, memory)
             recalled = True
         if memory:
             inject(messages, turn, memory)

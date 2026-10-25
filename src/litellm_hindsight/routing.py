@@ -80,7 +80,10 @@ def resolve(tags: list[str], cfg: RoutingConfig) -> Route | None:
             max_tokens=r.max_tokens,
         )
         for r in cfg.reads
-    )
+    ) + tuple(g.read for g in cfg.global_banks if g.applies_to.matches(value, scope, tags))
+    write_bank = cfg.write_bank.format(**fields)
+    if any(g.id == write_bank for g in cfg.global_banks):
+        raise RoutingError(f"write bank {write_bank!r} is a global bank; global banks are read-only")
     retain_tags = [t.format(**fields) for t in cfg.retain_tags if keep(t)]
     retain_tags += [t for t in tags if t.startswith(cfg.passthrough_prefixes) and t not in retain_tags]
     label = f"{bank_kind.name} {value}" + (f", {scope_kind.name} {scope}" if scope_kind and scope else "")
@@ -88,7 +91,7 @@ def resolve(tags: list[str], cfg: RoutingConfig) -> Route | None:
         bank_value=value,
         scope_value=scope,
         label=label,
-        write_bank=cfg.write_bank.format(**fields),
+        write_bank=write_bank,
         reads=reads,
         retain_tags=tuple(retain_tags),
     )

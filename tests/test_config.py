@@ -28,8 +28,8 @@ def test_every_key_is_required(section, key):
 
 def test_read_target_keys_are_required():
     raw = routing_dict()
-    raw["banks"]["read"][1].pop("budget")
-    with pytest.raises(ConfigError, match=r"banks.read\[1\].budget is required"):
+    raw["banks"]["read"][0].pop("budget")
+    with pytest.raises(ConfigError, match=r"banks.read\[0\].budget is required"):
         RoutingConfig.from_dict(raw, env=TEST_ENV)
 
 
@@ -51,10 +51,11 @@ def test_missing_hindsight_url_env_is_an_error():
 def test_scope_can_be_switched_off():
     cfg = make_config(
         tags={"scope": None},
-        banks={"write": "customer::{customer}", "read": [routing_dict()["banks"]["read"][1]]},
+        banks={"write": "customer::{customer}", "read": []},
         retain={"tags": ["source:litellm-proxy"]},
     )
     from litellm_hindsight.routing import resolve
 
     route = resolve(["customer:acme", "project:ignored"], cfg)
     assert route.scope_value is None and route.label == "customer acme"
+    assert [r.bank for r in route.reads] == ["global::sap"]

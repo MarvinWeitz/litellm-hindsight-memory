@@ -4,11 +4,11 @@ A LiteLLM proxy plugin that gives every tagged request long-term memory from [Hi
 
 Request tags decide everything. A request tagged `customer:acme` and `project:acme-portal`:
 
-1. recalls, in parallel, from `customer::acme` (memories tagged `project:acme-portal` or `project:_shared`) and from the shared `global::sap` bank,
+1. recalls, in parallel, from `customer::acme` (memories tagged `project:acme-portal` or `project:_shared`) and from the shared `global::sap` bank (or whichever [global banks](#global-banks) apply),
 2. gets those memories added to the developer's message before the model sees it,
 3. has the developer's message and the final answer saved to `customer::acme`, after the response has gone back.
 
-The global bank is only ever read. Requests without a customer tag pass through untouched.
+Global banks are only ever read. Requests without a customer tag pass through untouched.
 
 ## Quick start (Linux devcontainer)
 
@@ -103,9 +103,40 @@ litellm_settings:
   callbacks: litellm_hindsight.proxy_handler_instance
 ```
 
+## Global banks
+
+Shared banks on top of the customer banks are listed under `global_banks` in [`config/hindsight_routing.yaml`](config/hindsight_routing.yaml). Each entry says which bank, which routed requests read it, how to recall from it, and its Hindsight profile:
+
+```yaml
+global_banks:
+  - id: "global::sap"
+    name: "SAP CAP/BTP knowledge"
+    applies_to: all                     # or a mapping, see below
+    recall: {tags: [], tags_match: any, types: [], budget: low, max_tokens: 1000}
+    profile:
+      retain_mission: "Extract reusable SAP CAP/BTP knowledge ..."
+      disposition: {skepticism: 4, literalism: 4, empathy: 1}
+      config: {retain_custom_instructions: "...", entity_labels: [...]}   # any Hindsight bank config key
+  - id: "industry::utilities"
+    applies_to: {customer: [globex]}    # only Globex requests read this one
+    ...
+```
+
+`applies_to` keys follow the tag names in `tags:`. With the default names they are `customer`, `exclude_customer`, `project` and `exclude_project`, each a list of values, plus `request_tags`. Listed conditions must all hold. `request_tags` turns a bank into an opt-in: the request has to carry one of the listed tags, for example `stack:abap`. Matching global banks are recalled in parallel with the customer bank, in the order listed. The proxy never writes to a global bank, and a config whose write bank is a global bank is refused.
+
+Create the banks, or push a changed profile to them, with:
+
+```bash
+python -m litellm_hindsight.provision --dry-run   # show what would be sent
+python -m litellm_hindsight.provision             # create or update every global bank
+python -m litellm_hindsight.provision --bank global::sap --no-rerank
+```
+
+It reads the routing file from `HINDSIGHT_ROUTING_CONFIG` (or `--config`) and Hindsight's URL and key from the variables named in its `hindsight:` section. It is safe to run again: existing banks keep their memories and only get the new profile. `scripts/seed_banks.py` calls it too, so the demo and the proxy use the same definitions.
+
 ## Promotion into the global bank
 
-The plugin only reads `global::sap`. Reviewed knowledge gets there through a separate job in [`promotion/`](promotion/README.md): it harvests candidates from the customer banks, anonymizes them, stages them for a human review and publishes the approved ones. It shares no code with the plugin and can be deployed, scheduled and secured on its own.
+The plugin only reads the global banks. Reviewed knowledge gets there through a separate job in [`promotion/`](promotion/README.md): it harvests candidates from the customer banks, anonymizes them, stages them for a human review and publishes the approved ones. It shares no code with the plugin and can be deployed, scheduled and secured on its own.
 
 ## Development
 

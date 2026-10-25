@@ -1,5 +1,8 @@
 """Create the demo banks with the configuration from the architecture doc, then add sample memories.
 
+Customer banks are defined here. Global banks are provisioned from the routing
+config ($HINDSIGHT_ROUTING_CONFIG, else config/hindsight_routing.yaml).
+
 Usage: python scripts/seed_banks.py [--reset] [--no-rerank] [--no-memories]
 Needs HINDSIGHT_API_URL (default http://localhost:8888). Adding memories needs
 the proxy running with a working provider key, because Hindsight extracts
@@ -10,8 +13,12 @@ from __future__ import annotations
 
 import argparse
 import os
+from pathlib import Path
 
 from hindsight_client import Hindsight
+
+from litellm_hindsight.config import load_config
+from litellm_hindsight.provision import provision
 
 DOMAIN_VALUES = [
     ("cap", "SAP Cloud Application Programming Model: CDS, services, handlers"),
@@ -52,25 +59,12 @@ CUSTOMER = {
 # Without this, the extraction model sometimes writes facts in another language.
 ENGLISH_ONLY = "Write every fact and observation in English, whatever language the source text uses."
 
-GLOBAL = {
-    "retain_mission": (
-        "Extract reusable SAP CAP/BTP knowledge: patterns, configuration recipes, version-specific pitfalls, "
-        "error messages with root causes. Ignore anything customer-specific."
-    ),
-    "observations_mission": (
-        "Consolidate patterns confirmed across several sources. Flag guidance that contradicts newer SAP releases. Write in English."
-    ),
-    "reflect_mission": (
-        "You are an SAP CAP/BTP architect. Give generic, version-aware guidance "
-        "and say when it depends on the landscape."
-    ),
-}
-
 BANKS = {
     "customer::acme": (CUSTOMER, [["project:acme-portal"], ["project:acme-s4-extension"], ["project:_shared"]]),
     "customer::globex": (CUSTOMER, [["project:_shared"]]),
-    "global::sap": (GLOBAL, None),
 }
+# Global banks come from the routing config, so the proxy and the seed agree on them.
+ROUTING_CONFIG = Path(__file__).parents[1] / "config" / "hindsight_routing.yaml"
 
 SAMPLE_MEMORIES = [
     ("customer::acme", ["project:_shared", "domain:s4-integration"],
@@ -99,8 +93,10 @@ def main() -> None:
     args = parser.parse_args()
 
     client = Hindsight(base_url=os.environ.get("HINDSIGHT_API_URL", "http://localhost:8888"))
+    os.environ.setdefault("HINDSIGHT_API_URL", "http://localhost:8888")  # the routing file reads the URL from here
+    global_banks = load_config(os.environ.get("HINDSIGHT_ROUTING_CONFIG") or ROUTING_CONFIG).global_banks
     if args.reset:
-        for bank_id in BANKS:
+        for bank_id in [*BANKS, *(g.id for g in global_banks)]:
             try:
                 client.delete_bank(bank_id)
                 print(f"deleted {bank_id}")
@@ -117,11 +113,16 @@ def main() -> None:
             **({"default_observation_scopes": scopes} if scopes else {}),
         )
         print(f"configured {bank_id}")
+    provision(client, global_banks, config_overrides={"enable_reranking": False} if args.no_rerank else None)
 
     try:
         if args.no_memories:
             return
+        known = {*BANKS, *(g.id for g in global_banks)}
         for bank_id, tags, text in SAMPLE_MEMORIES:
+            if bank_id not in known:
+                print(f"skipped sample for {bank_id}: not in the config")
+                continue
             client.retain(bank_id, text, tags=tags, context="seed data", metadata={"source": "seed"})
             print(f"retained into {bank_id}: {text[:60]}...")
     finally:

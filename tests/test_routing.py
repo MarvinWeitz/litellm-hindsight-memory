@@ -63,7 +63,7 @@ def test_custom_scheme_and_extra_shared_bank():
               "scope": {"name": "repo", "prefix": "repo=", "when_missing": None}},
         banks={
             "write": "cust-{kunde}",
-            "read": [read("cust-{kunde}", ["repo:{repo}"]), read("industry::utilities"), read("global::sap")],
+            "read": [read("cust-{kunde}", ["repo:{repo}"]), read("industry::utilities")],
         },
         retain={"tags": ["repo:{repo}"]},
         allowed=None,
