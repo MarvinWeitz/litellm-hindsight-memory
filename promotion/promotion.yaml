@@ -1,0 +1,31 @@
+# Promotion of reusable SAP knowledge from customer banks into global::sap.
+# Separate from the proxy plugin: the plugin only reads global::sap, and this
+# job is the only writer. See promotion/README.md for the workflow.
+
+banks:
+  customers: "customer::"          # every bank with this prefix is harvested
+  staging: "staging::promotion"    # candidates waiting for review
+  global: "global::sap"            # published, reviewed knowledge
+
+harvest:
+  # One reflect per domain value, filtered to facts with that domain tag,
+  # plus one pass over the whole bank for facts without a domain tag.
+  domains: [cap, xsuaa, destinations, hana-cloud, event-mesh, s4-integration]
+  include_untagged: true
+  query: >-
+    Which SAP CAP/BTP patterns, pitfalls, fixes and configuration recipes in this bank
+    would apply to any customer? Leave out anything only true for this customer's landscape.
+  budget: mid
+  max_candidates_per_pass: 10
+
+anonymize:
+  # OpenAI-compatible endpoint. The local LiteLLM proxy works: requests carry
+  # no customer tag, so the memory plugin lets them through untouched.
+  base_url: http://localhost:4000/v1
+  api_key_env: LITELLM_MASTER_KEY
+  model_env: HINDSIGHT_LLM_MODEL
+  # Words that must never reach the global bank, on top of the customer slugs
+  # found in bank names. A candidate containing one after anonymization is dropped.
+  blocklist: [ACME-DC1]
+
+kinds: [decision, pitfall, pattern, runbook]

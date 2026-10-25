@@ -93,6 +93,10 @@ litellm_settings:
   callbacks: litellm_hindsight.proxy_handler_instance
 ```
 
+## Promotion into the global bank
+
+The plugin only reads `global::sap`. Reviewed knowledge gets there through a separate job in [`promotion/`](promotion/README.md): it harvests candidates from the customer banks, anonymizes them, stages them for a human review and publishes the approved ones. It shares no code with the plugin and can be deployed, scheduled and secured on its own.
+
 ## Development
 
 ```bash
