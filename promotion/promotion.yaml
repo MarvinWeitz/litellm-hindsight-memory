@@ -15,7 +15,7 @@ harvest:
   query: >-
     Which SAP CAP/BTP patterns, pitfalls, fixes and configuration recipes in this bank
     would apply to any customer? Leave out anything only true for this customer's landscape.
-  budget: mid
+  budget: low   # mid/high read more facts but take much longer per reflect
   max_candidates_per_pass: 10
 
 anonymize:

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -66,14 +68,18 @@ class HarvestResult:
     dropped: list[tuple[Candidate, str]] = field(default_factory=list)
 
 
-def harvest(store: HindsightStore, anonymizer: Anonymizer, cfg: PromotionConfig) -> HarvestResult:
+def harvest(store: HindsightStore, anonymizer: Anonymizer, cfg: PromotionConfig, *,
+            banks: list[str] | None = None, progress: Callable[[str], None] = lambda _: None) -> HarvestResult:
     result = HarvestResult(harvest_id=datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S"))
     customer_banks = [b for b in store.bank_ids() if b.startswith(cfg.customer_prefix)]
     customers = [b[len(cfg.customer_prefix):] for b in customer_banks]
     for bank in customer_banks:
-        raw, projects = _collect(store, cfg, bank)
+        if banks and bank not in banks:
+            continue
+        raw, projects = _collect(store, cfg, bank, progress)
         forbidden = customers + projects + list(cfg.blocklist)
-        for cand in raw:
+        for i, cand in enumerate(raw, 1):
+            progress(f"{bank}  anonymizing {i}/{len(raw)}")
             rw = anonymizer.rewrite(cand.original)
             cand.text, cand.kind, cand.topic_id, cand.reason = rw.text, rw.kind, rw.topic_id, rw.reason
             if not rw.generic:
@@ -85,7 +91,8 @@ def harvest(store: HindsightStore, anonymizer: Anonymizer, cfg: PromotionConfig)
     return result
 
 
-def _collect(store: HindsightStore, cfg: PromotionConfig, bank: str) -> tuple[list[Candidate], list[str]]:
+def _collect(store: HindsightStore, cfg: PromotionConfig, bank: str,
+             progress: Callable[[str], None]) -> tuple[list[Candidate], list[str]]:
     """Reflect per domain, add nominated facts, skip facts already promoted or rejected.
 
     Also returns the project slugs seen on the source facts: project names are
@@ -111,12 +118,20 @@ def _collect(store: HindsightStore, cfg: PromotionConfig, bank: str) -> tuple[li
         )
 
     for domain, tags in passes:
+        label = f"domain:{domain}" if domain else "whole bank"
+        # Reflect is an LLM loop and takes seconds to minutes; skip domains with no facts.
+        if tags and not store.has_memories(bank, tags):
+            progress(f"{bank}  {label}: no facts, skipped")
+            continue
+        started, before = time.monotonic(), len(seen)
+        progress(f"{bank}  {label}: reflecting...")
         out, facts = store.reflect(bank, cfg.query, budget=cfg.budget, schema=REFLECT_SCHEMA,
                                    tags=tags, tags_match="any_strict" if tags else "any")
         by_id = {f["id"]: f for f in facts}
         for item in (out.get("candidates") or [])[: cfg.max_candidates]:
             cited = [by_id[i] for i in item.get("source_fact_ids") or () if i in by_id]
             add(str(item.get("text", "")), cited or facts, domain)
+        progress(f"{bank}  {label}: {len(seen) - before} new candidates ({time.monotonic() - started:.0f} s)")
     for fact in store.memories(bank, [NOMINATED]):
         add(fact["text"], [fact], None)
     return list(seen.values()), sorted(projects)
