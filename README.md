@@ -15,7 +15,9 @@ The global bank is only ever read. Requests without a customer tag pass through 
 The devcontainer is one Linux container (Debian, Python 3.12) with its own Docker engine (Docker-in-Docker). LiteLLM, Hindsight and Postgres all run inside it, so the host needs only a devcontainer runtime: VS Code with Dev Containers, GitHub Codespaces, or the `devcontainer` CLI. Give it at least 4 CPUs, 8 GB RAM and 32 GB disk.
 
 1. Open the repository in the devcontainer. In VS Code, choose **Reopen in Container**. With the CLI, run `devcontainer up --workspace-folder .` and then `devcontainer exec --workspace-folder . bash`.
-2. In the container's terminal, edit `.env` (created from `.env.example` on first start) and set `ANTHROPIC_API_KEY`. To use OpenAI instead, set `OPENAI_API_KEY` and change `hindsight-extraction` in `config/litellm.yaml`.
+2. In the container's terminal, edit `.env` (created from `.env.example` on first start). Choose how the local proxy reaches models:
+   - **Upstream mode (default, no provider keys).** The local proxy forwards every request to an existing LiteLLM proxy, such as your company's, and adds memory on the way. Set `UPSTREAM_LITELLM_URL` and put your SSO token in `UPSTREAM_LITELLM_KEY`. Run `scripts/stack.sh models` to list the models it offers, and set `HINDSIGHT_LLM_MODEL` to a small, cheap one. Hindsight uses it to extract facts. When the token expires, run `scripts/stack.sh token <new-token>`. This updates `.env` and restarts only the proxy.
+   - **Direct mode.** Set `LITELLM_CONFIG=litellm.yaml` and `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY`, and change `hindsight-extraction` in `config/litellm.yaml`).
 3. Start the stack: `scripts/stack.sh up`. The first start pulls the Hindsight image (about 9 GB) and loads its models, which takes a few minutes. The script waits until both services answer.
 4. Create the demo banks and memories: `python scripts/seed_banks.py`. Wait a minute while Hindsight extracts facts. You can watch them arrive in the Hindsight UI on port 9999.
 5. Send a tagged request from the container's terminal:
@@ -25,7 +27,7 @@ The devcontainer is one Linux container (Debian, Python 3.12) with its own Docke
      -H "Authorization: Bearer sk-local-dev" \
      -H "x-litellm-tags: customer:acme,project:acme-portal" \
      -H "content-type: application/json" \
-     -d '{"model":"claude-sonnet-5-5","messages":[{"role":"user","content":"How do we handle roles on the portal?"}]}'
+     -d '{"model":"<a model from scripts/stack.sh models>","messages":[{"role":"user","content":"How do we handle roles on the portal?"}]}'
    ```
 
 6. Measure the overhead: `python scripts/bench.py`.

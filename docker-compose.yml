@@ -30,7 +30,8 @@ services:
       HINDSIGHT_API_LLM_PROVIDER: openai
       HINDSIGHT_API_LLM_BASE_URL: http://litellm:4000/v1
       HINDSIGHT_API_LLM_API_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev}
-      HINDSIGHT_API_LLM_MODEL: hindsight-extraction
+      # A model name the proxy can serve. In upstream mode, use one your company proxy offers.
+      HINDSIGHT_API_LLM_MODEL: ${HINDSIGHT_LLM_MODEL:-hindsight-extraction}
       HINDSIGHT_API_WORKER_ID: local-dev
       # CPU-friendly reranking, as Hindsight's performance guide suggests.
       HINDSIGHT_API_RERANKER_MAX_CANDIDATES: ${HINDSIGHT_RERANKER_MAX_CANDIDATES:-100}
@@ -43,6 +44,8 @@ services:
     build:
       context: .
       dockerfile: docker/litellm.Dockerfile
+    # litellm.yaml uses provider keys; litellm.upstream.yaml forwards to another LiteLLM proxy.
+    command: ["litellm", "--config", "/app/config/${LITELLM_CONFIG:-litellm.yaml}", "--port", "4000", "--host", "0.0.0.0"]
     env_file:
       - path: .env
         required: false
