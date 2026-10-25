@@ -22,6 +22,24 @@ async def test_recall_reads_customer_project_shared_and_global(config, fake_hind
     assert {r["bank_id"] for r in fake_hindsight.recalls} == {"customer::acme", "global::sap"}
 
 
+async def test_project_scope_is_enforced_even_if_server_leaks(config, fake_hindsight):
+    fake_hindsight.ignore_tag_filter = True
+    handler = HindsightMemoryHandler(config, fake_hindsight)
+    data = await handler.async_pre_call_hook(None, None, _request("auth?", ["customer:acme", "project:acme-portal"]), "acompletion")
+    content = data["messages"][0]["content"]
+    assert "XSUAA role collections" in content
+    assert "2023 FPS02" in content
+    assert "API_BUSINESS_PARTNER" not in content  # other project's fact dropped by the plugin
+    assert "cds.requires.auth.kind" in content  # untargeted global bank unaffected
+
+
+async def test_customer_bank_skips_observations(config, fake_hindsight):
+    handler = HindsightMemoryHandler(config, fake_hindsight)
+    await handler.async_pre_call_hook(None, None, _request("auth?", ["customer:acme", "project:acme-portal"]), "acompletion")
+    types = {r["bank_id"]: r.get("types") for r in fake_hindsight.recalls}
+    assert types == {"customer::acme": ["world", "experience"], "global::sap": None}
+
+
 async def test_customer_isolation(config, fake_hindsight):
     handler = HindsightMemoryHandler(config, fake_hindsight)
     data = await handler.async_pre_call_hook(None, None, _request("idp?", ["customer:globex"]), "acompletion")

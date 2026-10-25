@@ -28,6 +28,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
                 "bank": "customer::{customer}",
                 "tags": ["project:{project}", "project:_shared"],
                 "tags_match": "any_strict",
+                # Observations are consolidated across a bank and can carry another
+                # project's facts under this project's tag, so read raw facts only.
+                "types": ["world", "experience"],
                 "budget": "low",
                 "max_tokens": 1500,
             },
@@ -51,6 +54,7 @@ class ReadTarget:
     bank: str
     tags: tuple[str, ...] = ()
     tags_match: str = "any_strict"
+    types: tuple[str, ...] = ()  # memory types to recall; empty = all
     budget: str = "low"
     max_tokens: int = 1500
 
@@ -91,6 +95,7 @@ class RoutingConfig:
                     bank=r["bank"],
                     tags=tuple(r.get("tags") or ()),
                     tags_match=r.get("tags_match", "any_strict"),
+                    types=tuple(r.get("types") or ()),
                     budget=r.get("budget", "low"),
                     max_tokens=int(r.get("max_tokens", 1500)),
                 )

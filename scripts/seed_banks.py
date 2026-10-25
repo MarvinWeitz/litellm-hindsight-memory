@@ -1,6 +1,6 @@
 """Create the demo banks with the configuration from the architecture doc, then add sample memories.
 
-Usage: python scripts/seed_banks.py [--no-memories]
+Usage: python scripts/seed_banks.py [--reset] [--no-memories]
 Needs HINDSIGHT_API_URL (default http://localhost:8888). Adding memories needs
 the proxy running with a working provider key, because Hindsight extracts
 facts through the hindsight-extraction model.
@@ -42,20 +42,23 @@ CUSTOMER = {
     ),
     "observations_mission": (
         "Consolidate durable conventions and recurring problems for this customer. "
-        "Flag contradictions with earlier decisions."
+        "Flag contradictions with earlier decisions. Write in English."
     ),
     "reflect_mission": (
         "You are a senior SAP consultant on this customer's projects. "
         "Ground every answer in past decisions and the customer's landscape."
     ),
 }
+# Without this, the extraction model sometimes writes facts in another language.
+ENGLISH_ONLY = "Write every fact and observation in English, whatever language the source text uses."
+
 GLOBAL = {
     "retain_mission": (
         "Extract reusable SAP CAP/BTP knowledge: patterns, configuration recipes, version-specific pitfalls, "
         "error messages with root causes. Ignore anything customer-specific."
     ),
     "observations_mission": (
-        "Consolidate patterns confirmed across several sources. Flag guidance that contradicts newer SAP releases."
+        "Consolidate patterns confirmed across several sources. Flag guidance that contradicts newer SAP releases. Write in English."
     ),
     "reflect_mission": (
         "You are an SAP CAP/BTP architect. Give generic, version-aware guidance "
@@ -90,16 +93,24 @@ SAMPLE_MEMORIES = [
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--no-memories", action="store_true", help="only create and configure banks")
+    parser.add_argument("--reset", action="store_true", help="delete the demo banks and all their memories first")
     args = parser.parse_args()
 
     client = Hindsight(base_url=os.environ.get("HINDSIGHT_API_URL", "http://localhost:8888"))
+    if args.reset:
+        for bank_id in BANKS:
+            try:
+                client.delete_bank(bank_id)
+                print(f"deleted {bank_id}")
+            except Exception as exc:  # noqa: BLE001 - a missing bank is fine
+                print(f"could not delete {bank_id}: {exc}")
     for bank_id, (missions, scopes) in BANKS.items():
         client.create_bank(
             bank_id, name=bank_id, disposition_skepticism=4, disposition_literalism=4, disposition_empathy=1,
             **missions,
         )
         client.update_bank_config(
-            bank_id, entity_labels=ENTITY_LABELS,
+            bank_id, entity_labels=ENTITY_LABELS, retain_custom_instructions=ENGLISH_ONLY,
             **({"default_observation_scopes": scopes} if scopes else {}),
         )
         print(f"configured {bank_id}")
