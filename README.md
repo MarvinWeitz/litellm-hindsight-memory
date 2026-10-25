@@ -10,12 +10,15 @@ Request tags decide everything. A request tagged `customer:acme` and `project:ac
 
 The global bank is only ever read. Requests without a customer tag pass through untouched.
 
-## Quick start (devcontainer)
+## Quick start (Linux devcontainer)
 
-1. `cp .env.example .env` and set `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` and change `hindsight-extraction` in `config/litellm.yaml`).
-2. Open the folder in VS Code and choose **Reopen in Container**. Or, without VS Code, run `docker compose up -d --build`.
-3. Create the demo banks and memories: `python scripts/seed_banks.py`. Wait a minute while Hindsight extracts facts.
-4. Send a tagged request:
+The devcontainer is one Linux container (Debian, Python 3.12) with its own Docker engine (Docker-in-Docker). LiteLLM, Hindsight and Postgres all run inside it, so the host needs only a devcontainer runtime: VS Code with Dev Containers, GitHub Codespaces, or the `devcontainer` CLI. Give it at least 4 CPUs, 8 GB RAM and 32 GB disk.
+
+1. Open the repository in the devcontainer. In VS Code, choose **Reopen in Container**. With the CLI, run `devcontainer up --workspace-folder .` and then `devcontainer exec --workspace-folder . bash`.
+2. In the container's terminal, edit `.env` (created from `.env.example` on first start) and set `ANTHROPIC_API_KEY`. To use OpenAI instead, set `OPENAI_API_KEY` and change `hindsight-extraction` in `config/litellm.yaml`.
+3. Start the stack: `scripts/stack.sh up`. The first start pulls the Hindsight image (about 9 GB) and loads its models, which takes a few minutes. The script waits until both services answer.
+4. Create the demo banks and memories: `python scripts/seed_banks.py`. Wait a minute while Hindsight extracts facts. You can watch them arrive in the Hindsight UI on port 9999.
+5. Send a tagged request from the container's terminal:
 
    ```bash
    curl localhost:4000/v1/chat/completions \
@@ -25,15 +28,17 @@ The global bank is only ever read. Requests without a customer tag pass through 
      -d '{"model":"claude-sonnet-5-5","messages":[{"role":"user","content":"How do we handle roles on the portal?"}]}'
    ```
 
-5. Measure the overhead: `python scripts/bench.py`.
+6. Measure the overhead: `python scripts/bench.py`.
 
-| Service | Port | |
+`scripts/stack.sh logs` follows the proxy and Hindsight logs, and `scripts/stack.sh down` stops the stack. Docker data inside the devcontainer lives in a named volume, so the pulled images and memory banks survive container rebuilds.
+
+| Service | Port inside the container | |
 | --- | --- | --- |
 | LiteLLM proxy | 4000 | key `sk-local-dev` locally |
 | Hindsight API | 8888 | |
 | Hindsight UI | 9999 | browse banks and memories |
 
-The first start pulls the full Hindsight image (about 9 GB, with local embedding and reranker models).
+The devcontainer forwards these ports, so tools on your host (a browser, or Claude Code pointed at `http://localhost:4000`) reach them too.
 
 ## Tagging requests
 
