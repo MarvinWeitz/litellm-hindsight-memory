@@ -2,10 +2,13 @@
   // One Linux container that runs the whole stack with its own Docker engine
   // (Docker-in-Docker). Nothing runs on the host besides the devcontainer.
   "name": "litellm-hindsight-memory",
-  "build": {"dockerfile": "Dockerfile"},
+  // Plain Debian base: unlike the Python and bookworm images it ships no Yarn
+  // apt repository, whose expired key breaks apt-get in feature installs.
+  "image": "mcr.microsoft.com/devcontainers/base:trixie",
   "features": {
+    "ghcr.io/devcontainers/features/python:1": {"version": "3.12"},
     "ghcr.io/devcontainers/features/docker-in-docker:2": {
-      // Install Docker CE instead of Moby; Moby packages are not available for this base image.
+      // Install Docker CE instead of Moby; Moby packages are not available for Debian trixie.
       "moby": false
     }
   },
